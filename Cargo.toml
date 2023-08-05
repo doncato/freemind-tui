@@ -1,8 +1,22 @@
 [package]
 name = "freemind-tui"
 version = "0.1.0"
+authors = ["doncato <doncato@notarobot.cyou>"]
+description = "TUI Application working as a client with the Freemind API Server"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+chrono = { version = "0.4", features = ["std"] }
+clap = { version = "4", features = ["cargo"] }
+confy = "0.5"
+crossterm = "0.25"
+dialoguer = { version = "0.10", features = ["fuzzy-select", "completion"] }
+dirs = "5"
+quick-xml = { version = "0.27", features = ["async-tokio", "serialize"] }
+rand = "0.8"
+reqwest = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tui = "0.19"
