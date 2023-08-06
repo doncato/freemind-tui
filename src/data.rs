@@ -6,7 +6,7 @@ pub(crate) mod data_types {
     use reqwest::{Client, Response, header::HeaderValue};
     use quick_xml::{de::from_str, Reader, events::{attributes::Attribute, Event, BytesStart, BytesText, BytesEnd}, Writer};
     use rand::Rng;
-    use tui::{widgets::{ListItem, ListState}, style::{Modifier, Style}};
+    use tui::{widgets::{ListItem, ListState, TableState}, style::{Modifier, Style}};
 
     #[derive(Serialize, Deserialize)]
     struct Registry {
@@ -131,6 +131,17 @@ pub(crate) mod data_types {
             }
         }
 
+        /// A function that returns the App Element in a Form of Vectors
+        /// where each element is another vector consisting of the key
+        /// and the value.
+        pub fn get_vecs(&self) -> Vec<Vec<String>> {
+            return self
+                .to_string()
+                .split("\n")
+                .map(|e| e.split(": ").map(|e| e.to_string()).collect())
+                .collect();
+        }
+
         /// A function that returns the title followed by the description
         /// followed by the tags as a single lowercase string, this is designed
         /// for usage of searching and filtering
@@ -230,6 +241,9 @@ pub(crate) mod data_types {
         elements: Vec<AppElement>,
         synced: bool,
         pub list_state: ListState,
+        pub details_state: TableState,
+        pub prompt: Option<String>,
+        pub message: Option<String>
     }
 
     impl AppState {
@@ -240,6 +254,9 @@ pub(crate) mod data_types {
                 elements: Vec::new(),
                 synced: false,
                 list_state: ListState::default(),
+                details_state: TableState::default(),
+                prompt: None,
+                message: None,
             }
         }
 
@@ -305,8 +322,8 @@ pub(crate) mod data_types {
         /// have been made to the local state
         pub fn modified_string(&self) -> String {
             match self.synced {
-                true => " ",
-                false => "*",
+                true => "synced",
+                false => "edited",
             }.to_string()
         }
 
