@@ -220,7 +220,7 @@ pub(crate) mod data_types {
             let mut item = ListItem::new(self.title.clone());
             if self.removed {
                 item = item.style(Style::default().add_modifier(Modifier::CROSSED_OUT));
-            } else  if self.modified {
+            } else if self.modified {
                 item = item.style(Style::default().add_modifier(Modifier::BOLD));
             } else if self.id.is_none() {
                 item = item.style(Style::default().add_modifier(Modifier::ITALIC));

@@ -9,15 +9,14 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use dialoguer::{Input, Confirm, Password, FuzzySelect, Select, theme::ColorfulTheme, console::Term};
-use std::{error::Error, io};
+use dialoguer::{Input, Confirm, Password, Select, theme::ColorfulTheme, console::Term};
+use std::{io};
 use tui::{
     style::Style,
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Alignment},
-    widgets::{Block, Borders, Paragraph, Wrap, List, ListItem, Clear, BorderType, Row, Table},
+    widgets::{Block, Borders, Paragraph, Wrap, List, ListItem, BorderType, Row, Table},
     Frame, Terminal, text::{Spans, Span}, style::{Color, Modifier},
-    text::Text
 };
 
 /// Read the app configuration
@@ -223,7 +222,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, state: &mut AppState) {
         .map(|e| e.to_list_item())
         .collect();
     let elements_list = List::new(elements)
-        .block(standard_block.clone())
+        .block(standard_block.clone().title("Events"))
         .style(standard_style)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     f.render_stateful_widget(elements_list, main_chunks[0], &mut state.list_state);
@@ -247,12 +246,12 @@ fn ui<B: Backend>(f: &mut Frame<B>, state: &mut AppState) {
     */
 
     let vec_details: Vec<Row> = if let Some(selected_element) = state.get_selected_element() {
-        selected_element.get_vecs().into_iter().map(|e| Row::new(e).height(2)).collect()
+        selected_element.get_vecs().into_iter().map(|e| Row::new(e).bottom_margin(1)).collect()
     } else {
         Vec::new()
     };
     let details_table = Table::new(vec_details)
-        .block(standard_block.clone())
+        .block(standard_block.clone().title("Attributes"))
         .widths(&[Constraint::Percentage(30), Constraint::Percentage(70)])
         .column_spacing(1)
         .style(standard_style)
@@ -273,11 +272,12 @@ fn ui<B: Backend>(f: &mut Frame<B>, state: &mut AppState) {
             )
         ])    
     } else {
-        Spans::from(vec![Span::raw("")])
+        let txt = get_selected_details(state).unwrap_or("".to_string());
+        Spans::from(vec![Span::raw(txt)])
     };
 
     let editing_view = Paragraph::new(editing_content)
-        .block(standard_block.clone())
+        .block(standard_block.clone().title("Details"))
         .style(standard_style)
         .wrap(Wrap { trim: false });
 
@@ -420,39 +420,51 @@ fn create_new(state: &mut AppState) -> &mut AppElement {
     return state.get_selected_element_mut().expect("FATAL New element not found");
 }
 
+fn get_selected_details(state: &AppState) -> Option<String> {
+    if let Some(indx) = state.details_state.selected() {
+        let element: &AppElement = match state.get_selected_element() {
+            Some(element) => element,
+            None => return None,
+        };
+    return match indx {
+        1 => {
+            Some(element.title())
+        },
+        2 => {
+            Some(element.description())
+        },
+        3 => {
+            Some({
+                if let Some(due) = element.due() {
+                    let due_timestamp: i64 = due.into();
+                    match Utc.timestamp_opt(due_timestamp, 0) {
+                        LocalResult::None => "None".to_string(),
+                        LocalResult::Single(val) | LocalResult::Ambiguous(val, _) => {
+                            val.with_timezone(&chrono::Local).format("%d.%m.%y %H:%M").to_string()
+                        }
+                    }
+                } else {
+                    "None".to_string()
+                }
+            })
+        },
+        4 => {
+            Some(element.tags().join(" "))
+        },
+        _ => None
+    };
+    }
+    else {None}
+}
+
 fn edit_selected(state: &mut AppState) {
     if let Some(indx) = state.details_state.selected() {
-        let element: &mut AppElement = match state.get_selected_element_mut() {
-            Some(element) => element,
-            None => create_new(state),
-        };
         match indx {
             0 => {
                 state.message = Some("ID may not be edited manually".to_string());
             },
-            1 => {
-                state.modify_buffer = Some(element.title());
-            },
-            2 => {
-                state.modify_buffer = Some(element.description());
-            },
-            3 => {
-                state.modify_buffer = Some({
-                    if let Some(due) = element.due() {
-                        let due_timestamp: i64 = due.into();
-                        match Utc.timestamp_opt(due_timestamp, 0) {
-                            LocalResult::None => "None".to_string(),
-                            LocalResult::Single(val) | LocalResult::Ambiguous(val, _) => {
-                                val.with_timezone(&chrono::Local).format("%d.%m.%y %H:%M").to_string()
-                            }
-                        }
-                    } else {
-                        "None".to_string()
-                    }
-                })
-            },
-            4 => {
-                state.modify_buffer = Some(element.tags().join(" "));
+            1 | 2 | 3 | 4 => {
+                state.modify_buffer = get_selected_details(state);
             },
             _ => {},
         }
@@ -493,22 +505,26 @@ fn save_changes(state: &mut AppState) {
                 );
             },
             3 => {
-                let time: Option<u32> = if new_txt.is_empty() {
+                let time: Option<u32> = if new_txt.is_empty() || new_txt.to_lowercase() == "none" {
                     None
                 } else {
                     let offset: String = chrono::Local::now().format("%z").to_string();
                     u32::try_from(
-                        chrono::DateTime::parse_from_str(
+                        if let Ok(date) = chrono::DateTime::parse_from_str(
                             &format!("{} {}", new_txt, offset),"%d.%m.%y %H:%M %z"
-                        )
-                        .unwrap()
-                        .naive_utc()
-                        .timestamp()
+                        ) {
+                            date
+                                .naive_utc()
+                                .timestamp()
+                        } else {
+                            state.message = Some("Parsing Error!".to_string());
+                            return;                            
+                        }
                     ).ok()
                 };
                 if time.is_none() && !new_txt.is_empty() {
                     state.message = Some("Parsing Error!".to_string());
-                    return ();
+                    return;
                 };
                 element.modify(
                     element.title(),
@@ -570,13 +586,16 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
             // If we currently edit something we need to pass the chars:
             if state.buffer_modification() {
                 match key.code {
-                    KeyCode::Esc | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
-                        state.modify_buffer = None;
-                    },
-                    KeyCode::Enter | KeyCode::Right => {
-                        save_changes(&mut state);
+                    KeyCode::Esc | KeyCode::Left => {
                         state.modify_buffer = None;
                         continue;
+                    },
+                    KeyCode::Enter | KeyCode::Up | KeyCode::Down => {
+                        save_changes(&mut state);
+                        state.modify_buffer = None;
+                        if key.code == KeyCode::Enter {
+                            continue;
+                        }
                     },
                     KeyCode::Backspace => {
                         if let Some(buf) = state.modify_buffer.as_mut() {
