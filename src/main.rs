@@ -1,5 +1,6 @@
 mod data;
 use crate::data::data_types::{AppState, AppConfig, AppElement, AppCommand, AuthMethod};
+use chrono::{Utc, LocalResult, TimeZone};
 use clap::{Arg, Command, ArgMatches, crate_name, crate_authors, crate_description, crate_version, ArgAction};
 use std::path::PathBuf;
 use std::fs;
@@ -258,11 +259,16 @@ fn ui<B: Backend>(f: &mut Frame<B>, state: &mut AppState) {
     
     f.render_stateful_widget(details_table, main_chunks[1], &mut state.details_state);
 
-    let right_pane = Paragraph::new("")
+    let editing_content: String = if state.buffer_modification() {
+        format!("New Value: {}", state.modify_buffer.clone().unwrap_or("".to_string()))
+    } else {
+        "".to_string()
+    };
+    let editing_view = Paragraph::new(editing_content)
         .block(standard_block.clone())
-        .style(standard_style)
-        .wrap(Wrap { trim: false });
-    f.render_widget(right_pane, main_chunks[2]);
+        .style(standard_style);
+
+    f.render_widget(editing_view, main_chunks[2]);
 
     // Footer
     let actions_text = AppCommand::get_command_list_string().join(" ");
@@ -377,13 +383,141 @@ fn select_next_field(state: &mut AppState) {
 
 fn enable_editing(state: &mut AppState) {
     if state.details_state.selected().is_none() {
-        state.details_state.select(Some(0));
+        state.details_state.select(Some(1));
     }
 }
 
 fn disable_editing(state: &mut AppState) {
     if state.details_state.selected().is_some() {
         state.details_state.select(None);
+    }
+}
+
+fn create_new(state: &mut AppState) -> &mut AppElement {
+    let new_element: AppElement = AppElement::new(
+        None,
+        "".to_string(),
+        "".to_string(),
+        None,
+        vec!["".to_string()],
+    );
+    state.push(Some(new_element));
+    let indx = state.get_elements().len()-1;
+    state.list_state.select(Some(indx));
+    return state.get_selected_element_mut().expect("FATAL New element not found");
+}
+
+fn edit_selected(state: &mut AppState) {
+    if let Some(indx) = state.details_state.selected() {
+        let element: &mut AppElement = match state.get_selected_element_mut() {
+            Some(element) => element,
+            None => create_new(state),
+        };
+        match indx {
+            0 => {
+                state.message = Some("ID may not be edited manually".to_string());
+            },
+            1 => {
+                state.modify_buffer = Some(element.title());
+            },
+            2 => {
+                state.modify_buffer = Some(element.description());
+            },
+            3 => {
+                state.modify_buffer = Some({
+                    if let Some(due) = element.due() {
+                        let due_timestamp: i64 = due.into();
+                        match Utc.timestamp_opt(due_timestamp, 0) {
+                            LocalResult::None => "None".to_string(),
+                            LocalResult::Single(val) | LocalResult::Ambiguous(val, _) => {
+                                val.with_timezone(&chrono::Local).format("%d.%m.%y %H:%M").to_string()
+                            }
+                        }
+                    } else {
+                        "None".to_string()
+                    }
+                })
+            },
+            4 => {
+                state.modify_buffer = Some(element.tags().join(" "));
+            },
+            _ => {},
+        }
+    }
+}
+
+fn save_changes(state: &mut AppState) {
+    if let Some(indx) = state.details_state.selected() {
+        let new_txt: String = state.modify_buffer.clone().unwrap_or("".to_string());
+        let element: &mut AppElement = match state.get_selected_element_mut() {
+            Some(element) => element,
+            None => create_new(state),
+        };
+        match indx {
+            0 => {
+                state.message = Some("ID may not be edited manually".to_string());
+            },
+            1 => {
+                element.modify(
+                    new_txt,
+                    element.description(),
+                    element.due(),
+                    element.tags(),
+                );
+            },
+            2 => {
+                element.modify(
+                    element.title(),
+                    new_txt,
+                    element.due(),
+                    element.tags(),
+                );
+            },
+            3 => {
+                let time: Option<u32> = if new_txt.is_empty() {
+                    None
+                } else {
+                    let offset: String = chrono::Local::now().format("%z").to_string();
+                    u32::try_from(
+                        chrono::DateTime::parse_from_str(
+                            &format!("{} {}", new_txt, offset),"%d.%m.%y %H:%M %z"
+                        )
+                        .unwrap()
+                        .naive_utc()
+                        .timestamp()
+                    ).ok()
+                };
+                if time.is_none() && !new_txt.is_empty() {
+                    state.message = Some("Parsing Error!".to_string());
+                    return ();
+                };
+                element.modify(
+                    element.title(),
+                    element.description(),
+                    time,
+                    element.tags(),
+                );
+            }, 
+            4 => {
+                element.modify(
+                    element.title(),
+                    element.description(),
+                    element.due(),
+                    if new_txt.is_empty() {
+                        vec!["".to_string()]
+                    } else {
+                        new_txt
+                            .split(" ")
+                            .map(|e| {
+                                e.to_string()
+                            })
+                            .collect()
+                    },
+                );
+            },
+            _ => {},
+        }
+        state.unsynced();
     }
 }
 
@@ -409,6 +543,44 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
             if key.code != KeyCode::Null {
                 // Clear Message
                 state.message = None;
+            } else {
+                // We can also savely skip further evaluation when no key was
+                // pressed
+                continue;
+            }
+            // If we currently edit something we need to pass the chars:
+            if state.buffer_modification() {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
+                        state.modify_buffer = None;
+                    },
+                    KeyCode::Enter | KeyCode::Right => {
+                        save_changes(&mut state);
+                        state.modify_buffer = None;
+                        continue;
+                    },
+                    KeyCode::Backspace => {
+                        if let Some(buf) = state.modify_buffer.as_mut() {
+                            buf.pop();
+                        }
+                        continue;
+                    }
+                    KeyCode::Char(c) => {
+                        if let Some(buf) = state.modify_buffer.as_mut() {
+                            buf.push(
+                                if key.modifiers == KeyModifiers::SHIFT {
+                                    c.to_ascii_uppercase()
+                                } else {
+                                    c
+                                }
+                            );
+                        }
+                        continue;
+                    },
+                    _ => {
+                        continue;
+                    },
+                }
             }
             // Match all keys controlling Commands functionality
             let command: AppCommand = AppCommand::from_key(key.code);
@@ -419,6 +591,11 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
                 AppCommand::List => {
                     disable_editing(&mut state);
                 }
+                AppCommand::Add => {
+                    create_new(&mut state);
+                    enable_editing(&mut state);
+                    edit_selected(&mut state);
+                }
                 AppCommand::Remove => {
                     if state.remove_selected() {
                         state.unsynced();
@@ -426,6 +603,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
                 }
                 AppCommand::Edit => {
                     enable_editing(&mut state);
+                    edit_selected(&mut state);
                 }
                 AppCommand::Quit => {
                     if state.is_synced() || state.prompt.is_some() {
@@ -455,8 +633,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
                     } else if state.list_state.selected().is_some() && state.details_state.selected().is_none() {
                         enable_editing(&mut state);
                     } else if state.details_state.selected().is_some() {
-                        //edit_selected(&mut state);
-                        state.message = Some("Not yet implemented!".to_string());
+                        edit_selected(&mut state);
                     }
                 }
                 KeyCode::Up => {
@@ -477,7 +654,11 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
                     disable_editing(&mut state);
                 }
                 KeyCode::Right => {
-                    enable_editing(&mut state);
+                    if state.list_state.selected().is_some() && state.details_state.selected().is_none() {
+                        enable_editing(&mut state);
+                    } else if state.details_state.selected().is_some() {
+                        edit_selected(&mut state);
+                    }
                 }
                 _ => {}
             }

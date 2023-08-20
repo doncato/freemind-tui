@@ -158,11 +158,6 @@ pub(crate) mod data_types {
                 .to_lowercase();
         }
 
-        /// Gets the timestamp
-        pub fn get_timestamp(&self) -> Option<u32> {
-            return self.due
-        }
-
         /// Generates a new ID for this element. The id will not be in existing ids
         /// Updates the self element and the existing ids
         /// Returns the new id
@@ -243,7 +238,8 @@ pub(crate) mod data_types {
         pub list_state: ListState,
         pub details_state: TableState,
         pub prompt: Option<String>,
-        pub message: Option<String>
+        pub message: Option<String>,
+        pub modify_buffer: Option<String>,
     }
 
     impl AppState {
@@ -257,7 +253,13 @@ pub(crate) mod data_types {
                 details_state: TableState::default(),
                 prompt: None,
                 message: None,
+                modify_buffer: None,
             }
+        }
+
+        /// Checks whether there are pending changes in the modification buffer
+        pub fn buffer_modification(&self) -> bool {
+            return self.modify_buffer.is_some();
         }
 
         pub fn get_elements(&self) -> &Vec<AppElement> {
@@ -269,6 +271,14 @@ pub(crate) mod data_types {
                 None
             } else {
                 self.elements.get(self.list_state.selected().unwrap_or(0))
+            }
+        }
+
+        pub fn get_selected_element_mut(&mut self) -> Option<&mut AppElement> {
+            if self.list_state.selected().is_none() {
+                None
+            } else {
+                self.elements.get_mut(self.list_state.selected().unwrap_or(0))
             }
         }
 
@@ -321,9 +331,13 @@ pub(crate) mod data_types {
         /// Returns a string that supposes to indicate whether modifications
         /// have been made to the local state
         pub fn modified_string(&self) -> String {
-            match self.synced {
-                true => "synced",
-                false => "edited",
+            if self.buffer_modification() {
+                "editing"
+            } else {
+                match self.synced {
+                    true => "synced",
+                    false => "edited",
+            }
             }.to_string()
         }
 
