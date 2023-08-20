@@ -17,6 +17,7 @@ use tui::{
     layout::{Constraint, Direction, Layout, Alignment},
     widgets::{Block, Borders, Paragraph, Wrap, List, ListItem, Clear, BorderType, Row, Table},
     Frame, Terminal, text::{Spans, Span}, style::{Color, Modifier},
+    text::Text
 };
 
 /// Read the app configuration
@@ -259,14 +260,26 @@ fn ui<B: Backend>(f: &mut Frame<B>, state: &mut AppState) {
     
     f.render_stateful_widget(details_table, main_chunks[1], &mut state.details_state);
 
-    let editing_content: String = if state.buffer_modification() {
-        format!("New Value: {}", state.modify_buffer.clone().unwrap_or("".to_string()))
+    let editing_content = if state.buffer_modification() {
+        Spans::from(vec![
+            Span::styled(
+                "New Value: ",
+                Style::default().add_modifier(Modifier::BOLD)
+            ),
+            Span::raw(state.modify_buffer.clone().unwrap_or("".to_string())),
+            Span::styled(
+                "_",
+                Style::default().add_modifier(Modifier::SLOW_BLINK)
+            )
+        ])    
     } else {
-        "".to_string()
+        Spans::from(vec![Span::raw("")])
     };
+
     let editing_view = Paragraph::new(editing_content)
         .block(standard_block.clone())
-        .style(standard_style);
+        .style(standard_style)
+        .wrap(Wrap { trim: false });
 
     f.render_widget(editing_view, main_chunks[2]);
 
@@ -458,6 +471,9 @@ fn save_changes(state: &mut AppState) {
                 state.message = Some("ID may not be edited manually".to_string());
             },
             1 => {
+                if new_txt == element.title() {
+                    return;
+                }
                 element.modify(
                     new_txt,
                     element.description(),
@@ -466,6 +482,9 @@ fn save_changes(state: &mut AppState) {
                 );
             },
             2 => {
+                if new_txt == element.description() {
+                    return;
+                }
                 element.modify(
                     element.title(),
                     new_txt,
