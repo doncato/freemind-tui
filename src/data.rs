@@ -754,7 +754,8 @@ pub(crate) mod data_types {
         Quit,       // Q
         Remove,     // R
         Sync,       // S
-                    // T, U, V, W, X, Y
+        Attribute,  // T
+                    // U, V, W, X, Y
         None,
     }
 
@@ -772,6 +773,7 @@ pub(crate) mod data_types {
                 Self::Quit      => "[q]uit",
                 Self::Remove    => "[r]emove",
                 Self::Sync      => "[s]ync",
+                Self::Attribute => "a[t]tribute",
                 Self::None      => "[n]one",
             }.to_string()
         }
@@ -786,11 +788,12 @@ pub(crate) mod data_types {
                 3 => Self::Edit,
                 4 => Self::Add,
                 5 => Self::Remove,
-                6 => Self::Direct,
-                7 => Self::Boiling,
-                8 => Self::Config,
-                9 => Self::Help,
-                10 => Self::Quit,
+                6 => Self::Attribute,
+                7 => Self::Direct,
+                8 => Self::Boiling,
+                9 => Self::Config,
+                10 => Self::Help,
+                11 => Self::Quit,
                 _ => Self::None,
             }
         }
@@ -827,6 +830,7 @@ pub(crate) mod data_types {
                     'q' => Self::Quit,
                     'r' => Self::Remove,
                     's' => Self::Sync,
+                    't' => Self::Attribute,
                     _ => Self::None,
                 }
             } else {

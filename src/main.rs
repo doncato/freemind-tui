@@ -16,7 +16,7 @@ use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Alignment},
     widgets::{Block, Borders, Paragraph, Wrap, List, ListItem, BorderType, Row, Table},
-    Frame, Terminal, text::{Spans, Span}, style::{Color, Modifier},
+    Frame, Terminal, text::{Spans, Span}, style::{Color, Modifier}, 
 };
 
 /// Read the app configuration
@@ -246,10 +246,15 @@ fn ui<B: Backend>(f: &mut Frame<B>, state: &mut AppState) {
     */
 
     let vec_details: Vec<Row> = if let Some(selected_element) = state.get_selected_element() {
-        selected_element.get_vecs().into_iter().map(|e| Row::new(e).bottom_margin(1)).collect()
+        selected_element
+            .get_vecs()
+            .into_iter()
+            .map(|e| Row::new(e).bottom_margin(1))
+            .collect::<Vec<Row>>()
     } else {
         Vec::new()
     };
+
     let details_table = Table::new(vec_details)
         .block(standard_block.clone().title("Attributes"))
         .widths(&[Constraint::Percentage(30), Constraint::Percentage(70)])
