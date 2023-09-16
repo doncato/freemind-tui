@@ -1,5 +1,5 @@
 pub(crate) mod data_types {
-    use std::{fmt, io::Cursor, str};
+    use std::{fmt, io::Cursor, str, collections::HashMap};
     use chrono::{TimeZone, Utc, LocalResult};
     use crossterm::event::KeyCode;
     use serde::{Serialize, Deserialize};
@@ -45,6 +45,7 @@ pub(crate) mod data_types {
         description: String,
         due: Option<u32>,
         tags: Option<AppElementTags>,
+        attributes: HashMap<String, String>,
         #[serde(skip)]
         removed: bool,
         #[serde(skip)]
@@ -99,6 +100,7 @@ pub(crate) mod data_types {
                 description,
                 due,
                 tags: Some(AppElementTags::new(tags)),
+                attributes: HashMap::new(),
                 removed: false,
                 modified: false,
             }
@@ -207,6 +209,14 @@ pub(crate) mod data_types {
                 writer.write_event(Event::End(BytesEnd::new("tag"))).unwrap_or(());
             });
             writer.write_event(Event::End(BytesEnd::new("tags")))?;
+
+            self.attributes.clone().into_keys().for_each(|e| {
+                writer.write_event(Event::Start(BytesStart::new(&e))).unwrap_or(());
+                writer.write_event(Event::Text(BytesText::new(
+                    self.attributes.get(&e).unwrap_or(&"".to_string())
+                ))).unwrap_or(());
+                writer.write_event(Event::End(BytesEnd::new(&e))).unwrap_or(());
+            });
             
             if with_head {
                 writer.write_event(Event::End(BytesEnd::new("entry")))?;
@@ -229,12 +239,20 @@ pub(crate) mod data_types {
         }
     }
 
+    /// On which column the current acting focus is
+    pub enum AppFocus {
+        Elements,
+        Attributes,
+        Edit
+    }
+
     /// The current state of the app
     pub struct AppState {
         config: AppConfig,
         client: Option<Client>,
         elements: Vec<AppElement>,
         synced: bool,
+        pub focused_on: AppFocus,
         pub list_state: ListState,
         pub details_state: TableState,
         pub prompt: Option<String>,
@@ -249,6 +267,7 @@ pub(crate) mod data_types {
                 client: None,
                 elements: Vec::new(),
                 synced: false,
+                focused_on: AppFocus::Elements,
                 list_state: ListState::default(),
                 details_state: TableState::default(),
                 prompt: None,
