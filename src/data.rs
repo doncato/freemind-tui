@@ -25,9 +25,9 @@ pub(crate) mod data_types {
     }
 
     #[derive(Debug, Clone)]
-    enum Node<'t> {
-        Element(AppElement<'t>),
-        Directory(&'t AppDirectory<'t>),
+    enum Node {
+        Element(AppElement),
+        Directory(AppDirectory),
     }
 
     /*
@@ -38,7 +38,7 @@ pub(crate) mod data_types {
     }
     */
 
-    impl<'t> Node<'t> {
+    impl Node {
         /// Returns the ID of the node
         fn id(&self) -> Option<u16> {
             match self {
@@ -51,7 +51,7 @@ pub(crate) mod data_types {
         fn removed(&self) -> bool {
             match self {
                 Self::Element(e) => e.removed,
-                Self::Directory(e) => false,
+                Self::Directory(_) => false,
             }
         }
 
@@ -64,11 +64,11 @@ pub(crate) mod data_types {
         }
     }
 
-    struct Registry<'t> {
-        nodes: Vec<Node<'t>>,
+    struct Registry {
+        nodes: Vec<Node>,
     }
 
-    impl<'t> Registry<'t> {
+    impl Registry {
         /// Parses the xml document as a String into the Registry object
         fn from_string(xml: &String) -> Result<Self, quick_xml::Error> {
             let mut entries: Vec<Node> = Vec::new();
@@ -76,12 +76,10 @@ pub(crate) mod data_types {
             reader.trim_text(true);
 
             let mut in_element: bool = false;
-            let mut in_directory: u16 = 0;
 
-            let mut inside: &str = "";
+            let mut inside: String = "".to_string();
 
             let mut next_element: AppElement = AppElement::new(None, HashMap::new());
-            let mut next_dirs: Vec<AppDirectory> = Vec::new();
 
             let mut buf = Vec::new();
 
@@ -99,38 +97,24 @@ pub(crate) mod data_types {
                         next_element = AppElement::new(None, HashMap::new());
                     }
                     Event::Start(e) if e.name().as_ref() == b"directory" => {
-                        if let Some(id) = get_id_attribute(&reader, e)? {
-                            next_dirs.push(AppDirectory::new(
-                                Some(id),
-                                if next_dirs.len() > 0 {
-                                    Some(next_dirs.last().unwrap())
-                                } else {
-                                    None
-                                }
-                            ));
-                            in_directory += 1;
-                        }
+
                     }
                     Event::End(e) if e.name().as_ref() == b"directory" => {
-                        if next_dirs.len() > 0 {
-                            entries.push(Node::Directory(next_dirs.last().unwrap()));
-                            next_dirs.pop();
-                            in_directory -= 1;
-                        }
+
                     }
                     Event::Start(e) => {
-                        inside = str::from_utf8(e.name().as_ref()).unwrap_or("");
+                        inside = str::from_utf8(e.name().as_ref()).unwrap_or("").to_string();
                     }
                     Event::Text(e) => {
-                        if in_element {
+                        if false {//if in_element {
                             next_element.nodes.insert(
-                                NodeName::from_str(inside),
+                                NodeName::from_str(inside.to_string()),
                                 str::from_utf8(e.into_inner().as_ref()).unwrap_or("").to_string()
                             );
                         }
                     }
-                    Event::End(e) => {
-                        inside = "";
+                    Event::End(e) if e.name().as_ref() == inside.as_bytes() => {
+                        inside = "".to_string();
                     }
                     Event::End(e) if e.name().as_ref() == b"registry" => break,
                     Event::Eof => break,
@@ -153,22 +137,20 @@ pub(crate) mod data_types {
 
 
     #[derive(Debug, Clone)]
-    struct AppDirectory<'t> {
+    struct AppDirectory {
         id: Option<u16>,
-        parentdir: Option<&'t AppDirectory<'t>>,
     }
 
-    impl<'t> AppDirectory<'t> {
-        fn new(id: Option<u16>, parent: Option<&'t AppDirectory<'t>>) -> Self {
+    impl AppDirectory {
+        fn new(id: Option<u16>,) -> Self {
             Self {
                 id,
-                parentdir: parent
             }
         }
     }
 
     #[derive(Eq, Hash, Debug, Clone)]
-    pub enum NodeName<'t> {
+    pub enum NodeName {
         Title,
         Description,
         Location,
@@ -176,16 +158,16 @@ pub(crate) mod data_types {
         Due,
         Duration,
         Alert,
-        Other(&'t str),
+        Other(String),
     }
 
-    impl<'t> PartialEq for NodeName<'t> {
+    impl PartialEq for NodeName {
         fn eq(&self, other: &NodeName) -> bool {
             self == other
         }
     }
 
-    impl<'t> fmt::Display for NodeName<'t> {
+    impl fmt::Display for NodeName {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "{}", match self {
                 Self::Title => "title",
@@ -201,8 +183,8 @@ pub(crate) mod data_types {
         }
     }
 
-    impl<'t> NodeName<'t> {
-        pub fn from_str(s: &str) -> Self {
+    impl NodeName {
+        pub fn from_str(s: String) -> Self {
             match s.to_lowercase().as_str() {
                 "title" => Self::Title,
                 "descritpion" => Self::Description,
@@ -211,21 +193,20 @@ pub(crate) mod data_types {
                 "due" => Self::Due,
                 "duration" => Self::Duration,
                 "alert" => Self::Alert,
-                e => Self::Other(e)
+                e => Self::Other(e.to_string())
             }
         }
     }
 
     #[derive(Debug, Clone)]
-    pub struct AppElement<'t> {
+    pub struct AppElement {
         id: Option<u16>,
-        nodes: HashMap<NodeName<'t>, String>,
+        nodes: HashMap<NodeName, String>,
         removed: bool,
         modified: bool,
-        parentdir: Option<&'t AppDirectory<'t>>,
     }
 
-    impl<'t> PartialEq for AppElement<'t> {
+    impl PartialEq for AppElement {
         fn eq(&self, other: &AppElement) -> bool {
             match self.id {
                 Some(id) => Some(id) == other.id,
@@ -234,7 +215,7 @@ pub(crate) mod data_types {
         }
     }
 
-    impl<'t> fmt::Display for AppElement<'t> {
+    impl fmt::Display for AppElement {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             /*
             let disp_due: String = match self.nodes.get("due") {
@@ -263,14 +244,13 @@ pub(crate) mod data_types {
         }
     }
 
-    impl<'t> AppElement<'t> {
-        pub fn new(id: Option<u16>, nodes: HashMap<String, String>) -> Self {
+    impl AppElement {
+        pub fn new(id: Option<u16>, nodes: HashMap<NodeName, String>) -> Self {
             Self {
                 id,
-                nodes: HashMap::new(),
+                nodes,
                 removed: false,
                 modified: false,
-                parentdir: None,
             }
         }
 
@@ -310,7 +290,7 @@ pub(crate) mod data_types {
         /// for usage of searching and filtering
         pub fn get_text(&self) -> String {
             return String::new() 
-                + &self.nodes.into_values().collect::<Vec<String>>().join(" ")
+                + &self.nodes.clone().into_values().collect::<Vec<String>>().join(" ")
                 .to_lowercase();
         }
 
@@ -383,10 +363,10 @@ pub(crate) mod data_types {
     }
 
     /// The current state of the app
-    pub struct AppState<'t> {
+    pub struct AppState {
         config: AppConfig,
         client: Option<Client>,
-        elements: Vec<&'t AppElement<'t>>,
+        elements: Vec<AppElement>,
         synced: bool,
         pub focused_on: AppFocus,
         pub list_state: ListState,
@@ -396,7 +376,7 @@ pub(crate) mod data_types {
         pub modify_buffer: Option<String>,
     }
 
-    impl<'t> AppState<'t> {
+    impl AppState {
         pub fn new(config: AppConfig) -> Self {
             Self {
                 config,
@@ -417,19 +397,19 @@ pub(crate) mod data_types {
             return self.modify_buffer.is_some();
         }
 
-        pub fn get_elements(&self) -> Vec<&AppElement> {
-            return self.elements;
+        pub fn get_elements(&self) -> Vec<AppElement> {
+            return self.elements.clone();
         }
 
         pub fn get_selected_element(&self) -> Option<&AppElement> {
             if self.list_state.selected().is_none() {
                 None
             } else {
-                self.elements.get(self.list_state.selected().unwrap_or(0)).copied()
+                self.elements.get(self.list_state.selected().unwrap_or(0))
             }
         }
 
-        pub fn get_selected_element_mut(&mut self) -> Option<&mut &'t AppElement> {
+        pub fn get_selected_element_mut(&mut self) -> Option<&mut AppElement> {
             if self.list_state.selected().is_none() {
                 None
             } else {
@@ -437,7 +417,7 @@ pub(crate) mod data_types {
             }
         }
 
-        pub fn get_element_by_id(&mut self, id: u16) -> Option<&mut &'t AppElement> {
+        pub fn get_element_by_id(&mut self, id: u16) -> Option<&mut AppElement> {
             self
                 .elements
                 .iter_mut()
@@ -456,7 +436,7 @@ pub(crate) mod data_types {
 
         pub fn push(&mut self, element: Option<AppElement>) {
             if let Some(e) = element {
-                self.elements.push(&e)
+                self.elements.push(e)
             }
         }
 
@@ -567,10 +547,10 @@ pub(crate) mod data_types {
         /// already existing elements
         fn add_new_elements(&mut self, new: Vec<&AppElement>) {
             new.into_iter().for_each(|e| {
-                if self.elements.iter().any(|i| &e == i) {
+                if self.elements.iter().any(|i| e == i) {
 
                 } else {
-                    self.elements.push(e)
+                    self.elements.push(e.clone())
                 }
             })
         }

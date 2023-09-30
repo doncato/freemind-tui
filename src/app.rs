@@ -28,7 +28,7 @@ pub(crate) mod engine {
 
     /// Syncs the current app state with the configured remote
     /// returns true on success, false on failure
-    pub async fn sync<'t>(state: &'t mut AppState<'t>) -> bool {
+    pub async fn sync(state: &mut AppState) -> bool {
         state.sync().await.is_err()
     }
 
@@ -44,7 +44,7 @@ pub(crate) mod engine {
         }
     }
     
-    pub fn create_new<'t>(state: &mut AppState) -> &'t mut AppElement<'t> {
+    pub fn create_new(state: &mut AppState) -> &mut AppElement {
         let new_element: AppElement = AppElement::new(
             None,
             HashMap::new()

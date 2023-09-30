@@ -112,6 +112,7 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
     let mut state: AppState = AppState::new(cfg);
     //let mut last_result: Option<reqwest::Error> = None;
 
+
     let view = ui::ui;
 
     loop {
