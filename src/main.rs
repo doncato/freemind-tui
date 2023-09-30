@@ -9,8 +9,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use data::data_types::AppFocus;
-use std::{io};
+use data::data_types::{AppFocus, NodeName};
+use std::io;
 use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
@@ -102,81 +102,13 @@ fn save_changes(state: &mut AppState) {
             0 => {
                 state.message = Some("ID may not be edited manually".to_string());
             },
-            1 => {
-                if new_txt == element.title() {
-                    return;
-                }
-                element.modify(
-                    new_txt,
-                    element.description(),
-                    element.due(),
-                    element.tags(),
-                );
-            },
-            2 => {
-                if new_txt == element.description() {
-                    return;
-                }
-                element.modify(
-                    element.title(),
-                    new_txt,
-                    element.due(),
-                    element.tags(),
-                );
-            },
-            3 => {
-                let time: Option<u32> = if new_txt.is_empty() || new_txt.to_lowercase() == "none" {
-                    None
-                } else {
-                    let offset: String = chrono::Local::now().format("%z").to_string();
-                    u32::try_from(
-                        if let Ok(date) = chrono::DateTime::parse_from_str(
-                            &format!("{} {}", new_txt, offset),"%d.%m.%y %H:%M %z"
-                        ) {
-                            date
-                                .naive_utc()
-                                .timestamp()
-                        } else {
-                            state.message = Some("Parsing Error!".to_string());
-                            return;                            
-                        }
-                    ).ok()
-                };
-                if time.is_none() && !new_txt.is_empty() {
-                    state.message = Some("Parsing Error!".to_string());
-                    return;
-                };
-                element.modify(
-                    element.title(),
-                    element.description(),
-                    time,
-                    element.tags(),
-                );
-            }, 
-            4 => {
-                element.modify(
-                    element.title(),
-                    element.description(),
-                    element.due(),
-                    if new_txt.is_empty() {
-                        vec!["".to_string()]
-                    } else {
-                        new_txt
-                            .split(" ")
-                            .map(|e| {
-                                e.to_string()
-                            })
-                            .collect()
-                    },
-                );
-            },
             _ => {},
         }
         state.unsynced();
     }
 }
 
-async fn run_app<B: Backend>(terminal: &mut Terminal<B>, cfg: AppConfig) -> io::Result<()> {
+async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) -> io::Result<()> {
     let mut state: AppState = AppState::new(cfg);
     //let mut last_result: Option<reqwest::Error> = None;
 

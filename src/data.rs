@@ -4,55 +4,228 @@ pub(crate) mod data_types {
     use crossterm::event::KeyCode;
     use serde::{Serialize, Deserialize};
     use reqwest::{Client, Response, header::HeaderValue};
-    use quick_xml::{de::from_str, Reader, events::{attributes::Attribute, Event, BytesStart, BytesText, BytesEnd}, Writer};
+    use quick_xml::{Reader, events::{attributes::Attribute, Event, BytesStart, BytesText, BytesEnd}, Writer};
     use rand::Rng;
     use tui::{widgets::{ListItem, ListState, TableState}, style::{Modifier, Style}};
 
-    #[derive(Serialize, Deserialize)]
-    struct Registry {
-        #[serde(rename = "entry")]
-        entries: Vec<AppElement>,
+    /// Gets the value of the id attribute of any node
+    fn get_id_attribute<'a>(reader: &Reader<&[u8]>, element: BytesStart<'a>) -> Result<Option<u16>, quick_xml::Error> {
+        for attribute in element.attributes() {
+            if let Ok(val) = attribute {
+                if val.key.local_name().as_ref() == b"id" {
+                    let v = val.decode_and_unescape_value(&reader)?.to_string();
+                    return match v.parse::<u16>() {
+                        Ok(val) => Ok(Some(val)),
+                        Err(_) => Ok(None),
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct AppElementTags {
-        #[serde(rename = "tag")]
-        tags: Vec<String>,
+    #[derive(Debug, Clone)]
+    enum Node<'t> {
+        Element(AppElement<'t>),
+        Directory(&'t AppDirectory<'t>),
     }
 
-    impl AppElementTags {
-        pub fn new(tags: Vec<String>) -> Self {
-            Self {
-                tags
+    /*
+    impl<'t> FromIterator<_, T> for Node<'t> {
+        fn from_iter<T>(_: T) -> Self where T: IntoIterator, std::iter::IntoIterator::Item = T {
+            todo!() 
+        }
+    }
+    */
+
+    impl<'t> Node<'t> {
+        /// Returns the ID of the node
+        fn id(&self) -> Option<u16> {
+            match self {
+                Self::Element(e) => e.id,
+                Self::Directory(d) => d.id
             }
         }
 
-        pub fn empty() -> Self {
-            Self {
-                tags: Vec::new(),
+        /// Returns whether the node was removed
+        fn removed(&self) -> bool {
+            match self {
+                Self::Element(e) => e.removed,
+                Self::Directory(e) => false,
+            }
+        }
+
+        /// Returns the AppElement if it is an Element or None
+        fn element(&self) -> Option<&AppElement> {
+            match self {
+                Self::Element(e) => Some(e),
+                _ => None,
             }
         }
     }
 
+    struct Registry<'t> {
+        nodes: Vec<Node<'t>>,
+    }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(rename = "entry")]
-    pub struct AppElement {
-        #[serde(rename = "@id")]
+    impl<'t> Registry<'t> {
+        /// Parses the xml document as a String into the Registry object
+        fn from_string(xml: &String) -> Result<Self, quick_xml::Error> {
+            let mut entries: Vec<Node> = Vec::new();
+            let mut reader = Reader::from_str(xml);
+            reader.trim_text(true);
+
+            let mut in_element: bool = false;
+            let mut in_directory: u16 = 0;
+
+            let mut inside: &str = "";
+
+            let mut next_element: AppElement = AppElement::new(None, HashMap::new());
+            let mut next_dirs: Vec<AppDirectory> = Vec::new();
+
+            let mut buf = Vec::new();
+
+            loop {
+                match reader.read_event_into(&mut buf)? {
+                    Event::Start(e) if e.name().as_ref() == b"entry" => {
+                        in_element = true;
+                        if let Some(id) = get_id_attribute(&reader, e)? {
+                            next_element.id = Some(id);
+                        }
+                    }
+                    Event::End(e) if e.name().as_ref() == b"entry" => {
+                        in_element = false;
+                        entries.push(Node::Element(next_element));
+                        next_element = AppElement::new(None, HashMap::new());
+                    }
+                    Event::Start(e) if e.name().as_ref() == b"directory" => {
+                        if let Some(id) = get_id_attribute(&reader, e)? {
+                            next_dirs.push(AppDirectory::new(
+                                Some(id),
+                                if next_dirs.len() > 0 {
+                                    Some(next_dirs.last().unwrap())
+                                } else {
+                                    None
+                                }
+                            ));
+                            in_directory += 1;
+                        }
+                    }
+                    Event::End(e) if e.name().as_ref() == b"directory" => {
+                        if next_dirs.len() > 0 {
+                            entries.push(Node::Directory(next_dirs.last().unwrap()));
+                            next_dirs.pop();
+                            in_directory -= 1;
+                        }
+                    }
+                    Event::Start(e) => {
+                        inside = str::from_utf8(e.name().as_ref()).unwrap_or("");
+                    }
+                    Event::Text(e) => {
+                        if in_element {
+                            next_element.nodes.insert(
+                                NodeName::from_str(inside),
+                                str::from_utf8(e.into_inner().as_ref()).unwrap_or("").to_string()
+                            );
+                        }
+                    }
+                    Event::End(e) => {
+                        inside = "";
+                    }
+                    Event::End(e) if e.name().as_ref() == b"registry" => break,
+                    Event::Eof => break,
+                    _ => (),
+                }
+            }
+
+            Ok(Self {nodes: entries})
+        }
+
+        fn entries(&self) -> Vec<&AppElement> {
+            self.nodes
+                .iter()
+                .map(|e| e.element())
+                .filter(|e| e.is_some())
+                .map(|e| e.unwrap())
+                .collect()
+        }
+    }
+
+
+    #[derive(Debug, Clone)]
+    struct AppDirectory<'t> {
         id: Option<u16>,
-        #[serde(rename = "name")]
-        title: String,
-        description: String,
-        due: Option<u32>,
-        tags: Option<AppElementTags>,
-        attributes: HashMap<String, String>,
-        #[serde(skip)]
-        removed: bool,
-        #[serde(skip)]
-        modified: bool,
+        parentdir: Option<&'t AppDirectory<'t>>,
     }
 
-    impl PartialEq for AppElement {
+    impl<'t> AppDirectory<'t> {
+        fn new(id: Option<u16>, parent: Option<&'t AppDirectory<'t>>) -> Self {
+            Self {
+                id,
+                parentdir: parent
+            }
+        }
+    }
+
+    #[derive(Eq, Hash, Debug, Clone)]
+    pub enum NodeName<'t> {
+        Title,
+        Description,
+        Location,
+        Color,
+        Due,
+        Duration,
+        Alert,
+        Other(&'t str),
+    }
+
+    impl<'t> PartialEq for NodeName<'t> {
+        fn eq(&self, other: &NodeName) -> bool {
+            self == other
+        }
+    }
+
+    impl<'t> fmt::Display for NodeName<'t> {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}", match self {
+                Self::Title => "title",
+                Self::Description => "description",
+                Self::Location => "location",
+                Self::Color => "color",
+                Self::Due => "due",
+                Self::Duration => "duration",
+                Self::Alert => "alert",
+                Self::Other(val) => val,
+                _ => "unknown",
+            })
+        }
+    }
+
+    impl<'t> NodeName<'t> {
+        pub fn from_str(s: &str) -> Self {
+            match s.to_lowercase().as_str() {
+                "title" => Self::Title,
+                "descritpion" => Self::Description,
+                "location" => Self::Location,
+                "color" => Self::Color,
+                "due" => Self::Due,
+                "duration" => Self::Duration,
+                "alert" => Self::Alert,
+                e => Self::Other(e)
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct AppElement<'t> {
+        id: Option<u16>,
+        nodes: HashMap<NodeName<'t>, String>,
+        removed: bool,
+        modified: bool,
+        parentdir: Option<&'t AppDirectory<'t>>,
+    }
+
+    impl<'t> PartialEq for AppElement<'t> {
         fn eq(&self, other: &AppElement) -> bool {
             match self.id {
                 Some(id) => Some(id) == other.id,
@@ -61,11 +234,12 @@ pub(crate) mod data_types {
         }
     }
 
-    impl fmt::Display for AppElement {
+    impl<'t> fmt::Display for AppElement<'t> {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            let disp_due: String = match self.due {
+            /*
+            let disp_due: String = match self.nodes.get("due") {
                 Some(due) => {
-                    let due_timestamp: i64 = due.into();
+                    let due_timestamp: i64 = due.parse().unwrap_or(-1);
                     let utc_due: String = match Utc.timestamp_opt(due_timestamp, 0) {
                         LocalResult::None => "None".to_string(),
                         LocalResult::Single(val) => val.with_timezone(&chrono::Local).to_rfc2822(),
@@ -75,61 +249,48 @@ pub(crate) mod data_types {
                 },
                 None => "None".to_string()
             };
-
+            */
+        
             let id: String = match self.id {
                 Some(id) => format!("{}", id),
                 None => "None".to_string()
             };
             write!(
                 f,
-                "ID: {}\nTitle: {}\nDescription: {}\nDue: {:#?}\nTags: {}\n",
+                "ID: {}",
                 id,
-                &self.title,
-                &self.description,
-                disp_due,
-                &self.tags.clone().unwrap_or(AppElementTags::empty()).tags.join(" "),
             )
         }
     }
 
-    impl AppElement {
-        pub fn new(id: Option<u16>, title: String, description: String, due: Option<u32>, tags: Vec<String>) -> Self {
+    impl<'t> AppElement<'t> {
+        pub fn new(id: Option<u16>, nodes: HashMap<String, String>) -> Self {
             Self {
                 id,
-                title,
-                description,
-                due,
-                tags: Some(AppElementTags::new(tags)),
-                attributes: HashMap::new(),
+                nodes: HashMap::new(),
                 removed: false,
                 modified: false,
+                parentdir: None,
             }
         }
 
-        pub fn modify(&mut self, title: String, description: String, due: Option<u32>, tags: Vec<String>) {
-            self.title = title;
-            self.description = description;
-            self.due = due;
-            self.tags = Some(AppElementTags::new(tags));
-            self.modified = true;
+        pub fn modify(&mut self, key: NodeName, value: String) {
+            self.nodes.insert(key, value);
         }
 
-        pub fn title(&self) -> String {
-            self.clone().title
+        pub fn title(&self) -> Option<&String> {
+            self.nodes.get(&NodeName::Title)
         }
 
-        pub fn description(&self) -> String {
-            self.clone().description
+        pub fn description(&self) -> Option<&String> {
+            self.nodes.get(&NodeName::Description)
         }
 
         pub fn due(&self) -> Option<u32> {
-            self.due
-        }
-
-        pub fn tags(&self) -> Vec<String> {
-            match &self.tags {
-                Some(e) => {e.clone().tags},
-                None => {Vec::new()}
+            if let Some(due) = self.nodes.get(&NodeName::Due) {
+                due.parse::<u32>().ok()
+            } else {
+                None
             }
         }
 
@@ -149,14 +310,7 @@ pub(crate) mod data_types {
         /// for usage of searching and filtering
         pub fn get_text(&self) -> String {
             return String::new() 
-                + &self.title
-                + " "
-                + &self.description
-                + " "
-                + &self.tags.clone()
-                    .unwrap_or(AppElementTags::empty())
-                    .tags
-                    .join(" ")
+                + &self.nodes.into_values().collect::<Vec<String>>().join(" ")
                 .to_lowercase();
         }
 
@@ -188,36 +342,13 @@ pub(crate) mod data_types {
                     )
                 )?;
             }
-            writer.write_event(Event::Start(BytesStart::new("name")))?;
-            writer.write_event(Event::Text(BytesText::new(&self.title)))?;
-            writer.write_event(Event::End(BytesEnd::new("name")))?;
 
-            writer.write_event(Event::Start(BytesStart::new("description")))?;
-            writer.write_event(Event::Text(BytesText::new(&self.description)))?;
-            writer.write_event(Event::End(BytesEnd::new("description")))?;
-
-            if self.due.is_some() {
-                writer.write_event(Event::Start(BytesStart::new("due")))?;
-                writer.write_event(Event::Text(BytesText::new(&self.due.unwrap().to_string())))?;
-                writer.write_event(Event::End(BytesEnd::new("due")))?;
+            for (key, value) in self.nodes.iter() {
+                writer.write_event(Event::Start(BytesStart::new(key.to_string())))?;
+                writer.write_event(Event::Text(BytesText::new(value)))?;
+                writer.write_event(Event::End(BytesEnd::new(key.to_string())))?;
             }
 
-            writer.write_event(Event::Start(BytesStart::new("tags")))?;
-            self.tags.clone().unwrap_or(AppElementTags::empty()).tags.iter().for_each(|e| {
-                writer.write_event(Event::Start(BytesStart::new("tag"))).unwrap_or(());
-                writer.write_event(Event::Text(BytesText::new(&e))).unwrap_or(());
-                writer.write_event(Event::End(BytesEnd::new("tag"))).unwrap_or(());
-            });
-            writer.write_event(Event::End(BytesEnd::new("tags")))?;
-
-            self.attributes.clone().into_keys().for_each(|e| {
-                writer.write_event(Event::Start(BytesStart::new(&e))).unwrap_or(());
-                writer.write_event(Event::Text(BytesText::new(
-                    self.attributes.get(&e).unwrap_or(&"".to_string())
-                ))).unwrap_or(());
-                writer.write_event(Event::End(BytesEnd::new(&e))).unwrap_or(());
-            });
-            
             if with_head {
                 writer.write_event(Event::End(BytesEnd::new("entry")))?;
             }
@@ -227,7 +358,12 @@ pub(crate) mod data_types {
 
         /// Returns the AppElement as an ListItem
         pub fn to_list_item<'a>(&self) -> ListItem<'a> {
-            let mut item = ListItem::new(self.title.clone());
+            let mut item = ListItem::new(
+                self
+                    .title()
+                    .unwrap_or(&"<no title>".to_string())
+                    .clone()
+            );
             if self.removed {
                 item = item.style(Style::default().add_modifier(Modifier::CROSSED_OUT));
             } else if self.modified {
@@ -247,10 +383,10 @@ pub(crate) mod data_types {
     }
 
     /// The current state of the app
-    pub struct AppState {
+    pub struct AppState<'t> {
         config: AppConfig,
         client: Option<Client>,
-        elements: Vec<AppElement>,
+        elements: Vec<&'t AppElement<'t>>,
         synced: bool,
         pub focused_on: AppFocus,
         pub list_state: ListState,
@@ -260,7 +396,7 @@ pub(crate) mod data_types {
         pub modify_buffer: Option<String>,
     }
 
-    impl AppState {
+    impl<'t> AppState<'t> {
         pub fn new(config: AppConfig) -> Self {
             Self {
                 config,
@@ -281,19 +417,19 @@ pub(crate) mod data_types {
             return self.modify_buffer.is_some();
         }
 
-        pub fn get_elements(&self) -> &Vec<AppElement> {
-            return &self.elements;
+        pub fn get_elements(&self) -> Vec<&AppElement> {
+            return self.elements;
         }
 
         pub fn get_selected_element(&self) -> Option<&AppElement> {
             if self.list_state.selected().is_none() {
                 None
             } else {
-                self.elements.get(self.list_state.selected().unwrap_or(0))
+                self.elements.get(self.list_state.selected().unwrap_or(0)).copied()
             }
         }
 
-        pub fn get_selected_element_mut(&mut self) -> Option<&mut AppElement> {
+        pub fn get_selected_element_mut(&mut self) -> Option<&mut &'t AppElement> {
             if self.list_state.selected().is_none() {
                 None
             } else {
@@ -301,7 +437,7 @@ pub(crate) mod data_types {
             }
         }
 
-        pub fn get_element_by_id(&mut self, id: u16) -> Option<&mut AppElement> {
+        pub fn get_element_by_id(&mut self, id: u16) -> Option<&mut &'t AppElement> {
             self
                 .elements
                 .iter_mut()
@@ -320,7 +456,7 @@ pub(crate) mod data_types {
 
         pub fn push(&mut self, element: Option<AppElement>) {
             if let Some(e) = element {
-                self.elements.push(e)
+                self.elements.push(&e)
             }
         }
 
@@ -330,15 +466,15 @@ pub(crate) mod data_types {
 
         pub fn sort_by_due(&mut self) {
             self.elements.sort_by(|a, b| {
-                match a.due {
+                match a.due() {
                     Some(due_a) => {
-                        match b.due {
+                        match b.due() {
                             Some(due_b) => {due_a.cmp(&due_b)},
                             None => {due_a.cmp(&0)}
                         }
                     },
                     None => {
-                        match b.due {
+                        match b.due() {
                             Some(due_b) => {due_b.cmp(&0)},
                             None => {0.cmp(&0)}
                         }
@@ -429,7 +565,7 @@ pub(crate) mod data_types {
 
         /// Adds non existing elements to the State of elements, skips
         /// already existing elements
-        fn add_new_elements(&mut self, new: Vec<AppElement>) {
+        fn add_new_elements(&mut self, new: Vec<&AppElement>) {
             new.into_iter().for_each(|e| {
                 if self.elements.iter().any(|i| &e == i) {
 
@@ -633,8 +769,6 @@ pub(crate) mod data_types {
                                 }
                             }
                         }
-
-
                     },
                     Ok(Event::Start(e)) if e.name().as_ref() == b"entry" => {
                         let mut write: bool = true;
@@ -707,9 +841,9 @@ pub(crate) mod data_types {
 
             let (entries_modified, mut answer) = self.edit_entries(answer).unwrap();
 
-            let fetched_registry: Registry = from_str(&answer).unwrap();
+            let fetched_registry: Registry = Registry::from_string(&answer).unwrap();
 
-            let mut existing_ids: Vec<u16> = fetched_registry.entries
+            let mut existing_ids: Vec<u16> = fetched_registry.entries()
                 .clone()
                 .into_iter()
                 .filter(|e| !e.removed)
@@ -729,7 +863,7 @@ pub(crate) mod data_types {
             }
 
 
-            self.add_new_elements(fetched_registry.entries);
+            self.add_new_elements(fetched_registry.entries());
 
             self.sort_by_due();
 

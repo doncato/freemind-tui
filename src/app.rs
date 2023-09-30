@@ -2,6 +2,7 @@ pub(crate) mod engine {
     use crate::ui;
     use crate::data::data_types::{AppState, AppConfig, AppElement};
     use clap::{Arg, Command, ArgMatches, crate_authors, crate_description, crate_version, ArgAction};
+    use std::collections::HashMap;
     use std::{fs, path::PathBuf};
 
 
@@ -27,7 +28,7 @@ pub(crate) mod engine {
 
     /// Syncs the current app state with the configured remote
     /// returns true on success, false on failure
-    pub async fn sync(state: &mut AppState) -> bool {
+    pub async fn sync<'t>(state: &'t mut AppState<'t>) -> bool {
         state.sync().await.is_err()
     }
 
@@ -43,13 +44,10 @@ pub(crate) mod engine {
         }
     }
     
-    pub fn create_new(state: &mut AppState) -> &mut AppElement {
+    pub fn create_new<'t>(state: &mut AppState) -> &'t mut AppElement<'t> {
         let new_element: AppElement = AppElement::new(
             None,
-            "".to_string(),
-            "".to_string(),
-            None,
-            vec!["".to_string()],
+            HashMap::new()
         );
         state.push(Some(new_element));
         let indx = state.get_elements().len()-1;
@@ -163,10 +161,10 @@ pub(crate) mod ui {
             };
         return match indx {
             1 => {
-                Some(element.title())
+                Some(element.title().unwrap_or(&"".to_string()).to_string())
             },
             2 => {
-                Some(element.description())
+                Some(element.description().unwrap_or(&"".to_string()).to_string())
             },
             3 => {
                 Some({
@@ -182,9 +180,6 @@ pub(crate) mod ui {
                         "None".to_string()
                     }
                 })
-            },
-            4 => {
-                Some(element.tags().join(" "))
             },
             _ => None
         };
