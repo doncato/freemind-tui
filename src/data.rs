@@ -1,5 +1,5 @@
 pub(crate) mod data_types {
-    use std::{fmt, io::Cursor, str, collections::HashMap};
+    use std::{fmt, io::Cursor, str, collections::{HashMap, hash_map::Iter}};
     use chrono::{TimeZone, Utc, LocalResult};
     use crossterm::event::KeyCode;
     use serde::{Serialize, Deserialize};
@@ -64,37 +64,44 @@ pub(crate) mod data_types {
         }
     }
 
+    #[derive(Debug, Clone)]
     struct Registry {
         nodes: Vec<Node>,
     }
 
     impl Registry {
+        fn empty() -> Self {
+            Self { nodes: Vec::new() }
+        }
+
         /// Parses the xml document as a String into the Registry object
-        fn from_string(xml: &String) -> Result<Self, quick_xml::Error> {
-            let mut entries: Vec<Node> = Vec::new();
+        fn from_string(mut self, xml: &String) -> Result<Self, quick_xml::Error> {
             let mut reader = Reader::from_str(xml);
             reader.trim_text(true);
 
-            let mut in_element: bool = false;
+            let mut obj_count: u16 = 0;
+
+            let mut in_element: Option<u16> = None;
 
             let mut inside: String = "".to_string();
 
-            let mut next_element: AppElement = AppElement::new(None, HashMap::new());
+            let mut next_map: HashMap<NodeName, String> = HashMap::new();
 
             let mut buf = Vec::new();
 
             loop {
                 match reader.read_event_into(&mut buf)? {
                     Event::Start(e) if e.name().as_ref() == b"entry" => {
-                        in_element = true;
-                        if let Some(id) = get_id_attribute(&reader, e)? {
-                            next_element.id = Some(id);
-                        }
+                        in_element = get_id_attribute(&reader, e)?;
                     }
                     Event::End(e) if e.name().as_ref() == b"entry" => {
-                        in_element = false;
-                        entries.push(Node::Element(next_element));
-                        next_element = AppElement::new(None, HashMap::new());
+                        if in_element.is_some() {
+                            self.nodes.push(Node::Element(AppElement::new(in_element, next_map.clone())));
+                            next_map.clear();
+                            obj_count += 1;
+                            in_element = None;
+                        }
+
                     }
                     Event::Start(e) if e.name().as_ref() == b"directory" => {
 
@@ -106,14 +113,22 @@ pub(crate) mod data_types {
                         inside = str::from_utf8(e.name().as_ref()).unwrap_or("").to_string();
                     }
                     Event::Text(e) => {
-                        if false {//if in_element {
-                            next_element.nodes.insert(
-                                NodeName::from_str(inside.to_string()),
+                        //println!("{:?} {:?}", inside.as_str(), str::from_utf8(e.clone().into_inner().as_ref()));
+                        if in_element.is_some() {
+                            next_map.insert(
+                                NodeName::from_str(inside.as_str()),
                                 str::from_utf8(e.into_inner().as_ref()).unwrap_or("").to_string()
                             );
+                            inside = "".to_string();
                         }
-                    }
+                    },
                     Event::End(e) if e.name().as_ref() == inside.as_bytes() => {
+                        if inside != "".to_string() {
+                            next_map.insert(
+                                NodeName::from_str(inside.as_str()),
+                                "".to_string()
+                            );
+                        }
                         inside = "".to_string();
                     }
                     Event::End(e) if e.name().as_ref() == b"registry" => break,
@@ -122,7 +137,7 @@ pub(crate) mod data_types {
                 }
             }
 
-            Ok(Self {nodes: entries})
+            Ok(self)
         }
 
         fn entries(&self) -> Vec<&AppElement> {
@@ -149,28 +164,31 @@ pub(crate) mod data_types {
         }
     }
 
-    #[derive(Eq, Hash, Debug, Clone)]
+    /// The Keynames for different Nodes
+    #[derive(PartialEq, Eq, Hash, Debug, Clone)]
     pub enum NodeName {
+        /// The title
         Title,
+        /// A description
         Description,
+        /// The Location aka. where it takes place
         Location,
+        /// A color which can optionally be used for display purposes
         Color,
+        /// A due date
         Due,
+        /// How long it takes place in minutes
         Duration,
+        /// How to trigger an alert
         Alert,
+        /// Any other elements
         Other(String),
-    }
-
-    impl PartialEq for NodeName {
-        fn eq(&self, other: &NodeName) -> bool {
-            self == other
-        }
     }
 
     impl fmt::Display for NodeName {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "{}", match self {
-                Self::Title => "title",
+                Self::Title => "name",
                 Self::Description => "description",
                 Self::Location => "location",
                 Self::Color => "color",
@@ -178,22 +196,36 @@ pub(crate) mod data_types {
                 Self::Duration => "duration",
                 Self::Alert => "alert",
                 Self::Other(val) => val,
-                _ => "unknown",
+                _ => "",
             })
         }
     }
 
     impl NodeName {
-        pub fn from_str(s: String) -> Self {
+        pub fn from_str(s: &str) -> Self {
             match s.to_lowercase().as_str() {
-                "title" => Self::Title,
-                "descritpion" => Self::Description,
+                "name" => Self::Title,
+                "description" => Self::Description,
                 "location" => Self::Location,
                 "color" => Self::Color,
                 "due" => Self::Due,
                 "duration" => Self::Duration,
                 "alert" => Self::Alert,
                 e => Self::Other(e.to_string())
+            }
+        }
+
+        pub fn order(&self) -> u8 {
+            match self {
+                Self::Title => 0,
+                Self::Description => 1,
+                Self::Location => 2,
+                Self::Due => 3,
+                Self::Duration => 4,
+                Self::Other(v) => 127 + (v.len() % 128).try_into().unwrap_or(0),
+                Self::Color => 254,
+                Self::Alert => 254,
+                _ => u8::MAX,
             }
         }
     }
@@ -254,10 +286,6 @@ pub(crate) mod data_types {
             }
         }
 
-        pub fn modify(&mut self, key: NodeName, value: String) {
-            self.nodes.insert(key, value);
-        }
-
         pub fn title(&self) -> Option<&String> {
             self.nodes.get(&NodeName::Title)
         }
@@ -273,15 +301,30 @@ pub(crate) mod data_types {
                 None
             }
         }
+        
+        /// Returns all nodes of the element
+        pub fn nodes(&mut self) -> &mut HashMap<NodeName, String> {
+            &mut self.nodes
+        }
+
+        /// Returns the nodes of the element as an Iter
+        pub fn get_nodes(&self) -> Iter<NodeName, String> {
+            return self.nodes.iter()
+        }
 
         /// A function that returns the App Element in a Form of Vectors
         /// where each element is another vector consisting of the key
-        /// and the value.
-        pub fn get_vecs(&self) -> Vec<Vec<String>> {
-            return self
-                .to_string()
-                .split("\n")
-                .map(|e| e.split(": ").map(|e| e.to_string()).collect())
+        /// and the value. Also sorts the elements
+        pub fn get_vecs(&self) -> Vec<(String, String)> {
+            let mut result: Vec<(&NodeName, &String)> = self.nodes
+                .iter()
+                .collect();
+                
+            result.sort_by(|a, b| a.0.order().cmp(&b.0.order()));
+
+            return result
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
         }
 
@@ -397,8 +440,14 @@ pub(crate) mod data_types {
             return self.modify_buffer.is_some();
         }
 
+        /// Returns All AppElements from the state as a Vec
         pub fn get_elements(&self) -> Vec<AppElement> {
-            return self.elements.clone();
+            self.elements.clone()
+        }
+
+        /// Returns All AppElements mutable from the state as a Vec
+        pub fn get_elements_mut(&mut self) -> &mut Vec<AppElement> {
+            &mut self.elements
         }
 
         pub fn get_selected_element(&self) -> Option<&AppElement> {
@@ -544,7 +593,7 @@ pub(crate) mod data_types {
         }
 
         /// Adds non existing elements to the State of elements, skips
-        /// already existing elements
+        /// already existing elements and returns the result
         fn add_new_elements(&mut self, new: Vec<&AppElement>) {
             new.into_iter().for_each(|e| {
                 if self.elements.iter().any(|i| e == i) {
@@ -821,7 +870,7 @@ pub(crate) mod data_types {
 
             let (entries_modified, mut answer) = self.edit_entries(answer).unwrap();
 
-            let fetched_registry: Registry = Registry::from_string(&answer).unwrap();
+            let fetched_registry: Registry = Registry::empty().from_string(&answer).unwrap();
 
             let mut existing_ids: Vec<u16> = fetched_registry.entries()
                 .clone()

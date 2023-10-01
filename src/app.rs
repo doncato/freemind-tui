@@ -1,6 +1,6 @@
 pub(crate) mod engine {
     use crate::ui;
-    use crate::data::data_types::{AppState, AppConfig, AppElement};
+    use crate::data::data_types::{AppState, AppConfig, AppElement, NodeName};
     use clap::{Arg, Command, ArgMatches, crate_authors, crate_description, crate_version, ArgAction};
     use std::collections::HashMap;
     use std::{fs, path::PathBuf};
@@ -34,7 +34,7 @@ pub(crate) mod engine {
 
     pub fn enable_editing(state: &mut AppState) {
         if state.details_state.selected().is_none() {
-            state.details_state.select(Some(1));
+            state.details_state.select(Some(0));
         }
     }
     
@@ -45,12 +45,13 @@ pub(crate) mod engine {
     }
     
     pub fn create_new(state: &mut AppState) -> &mut AppElement {
+        let len = state.get_elements().len();
         let new_element: AppElement = AppElement::new(
             None,
-            HashMap::new()
+            HashMap::new(),
         );
         state.push(Some(new_element));
-        let indx = state.get_elements().len()-1;
+        let indx = len-1;
         state.list_state.select(Some(indx));
         return state.get_selected_element_mut().expect("FATAL New element not found");
     }
@@ -64,19 +65,28 @@ pub(crate) mod engine {
 
     }
     
-    
     pub fn edit_selected(state: &mut AppState) {
         if let Some(indx) = state.details_state.selected() {
-            match indx {
-                0 => {
-                    state.message = Some("ID may not be edited manually".to_string());
-                },
-                1 | 2 | 3 | 4 => {
-                    state.modify_buffer = ui::get_selected_details(state);
-                },
-                _ => {},
-            }
+            state.modify_buffer = ui::get_selected_details(state);
         }
+    }
+
+    pub fn switch_up(state: &mut AppState) {
+        if let Some(i) = state.list_state.selected() {
+            if i > 0 {
+                state.get_elements_mut().swap(i, i-1);
+            }
+
+        };
+    }
+
+    pub fn switch_down(state: &mut AppState) {
+        if let Some(i) = state.list_state.selected() {
+            if i < state.get_elements().len() {
+                state.get_elements_mut().swap(i, i+1);
+            }
+
+        };
     }
 
     /// Read the app configuration
@@ -147,10 +157,10 @@ pub(crate) mod ui {
     use chrono::{Utc, LocalResult, TimeZone};
     use tui::{
         style::Style,
-        backend::{Backend, CrosstermBackend},
+        backend::{Backend},
         layout::{Constraint, Direction, Layout, Alignment},
         widgets::{Block, Borders, Paragraph, Wrap, List, ListItem, BorderType, Row, Table},
-        Frame, Terminal, text::{Spans, Span}, style::{Color, Modifier}, 
+        Frame, text::{Spans, Span}, style::{Color, Modifier}, 
     };
 
     pub fn get_selected_details(state: &AppState) -> Option<String> {
@@ -159,32 +169,15 @@ pub(crate) mod ui {
                 Some(element) => element,
                 None => return None,
             };
-        return match indx {
-            1 => {
-                Some(element.title().unwrap_or(&"".to_string()).to_string())
-            },
-            2 => {
-                Some(element.description().unwrap_or(&"".to_string()).to_string())
-            },
-            3 => {
-                Some({
-                    if let Some(due) = element.due() {
-                        let due_timestamp: i64 = due.into();
-                        match Utc.timestamp_opt(due_timestamp, 0) {
-                            LocalResult::None => "None".to_string(),
-                            LocalResult::Single(val) | LocalResult::Ambiguous(val, _) => {
-                                val.with_timezone(&chrono::Local).format("%d.%m.%y %H:%M").to_string()
-                            }
-                        }
-                    } else {
-                        "None".to_string()
-                    }
-                })
-            },
-            _ => None
-        };
+            let details = element.get_vecs();
+            if indx < details.len() {
+                Some(details[indx].1.clone())
+            } else {
+                None
+            }
+        } else {
+            None
         }
-        else {None}
     }
 
     pub fn prompt_ui<B: Backend>(f: &mut Frame<B>, state: &mut AppState) {
@@ -261,6 +254,7 @@ pub(crate) mod ui {
                     Constraint::Length(1),
                     Constraint::Min(1),
                     Constraint::Length(1),
+                    Constraint::Length(1),
                 ]
                 .as_ref(),
             )
@@ -325,6 +319,7 @@ pub(crate) mod ui {
             .iter()
             .map(|e| e.to_list_item())
             .collect();
+
         let elements_list = List::new(elements)
             .block(standard_block.clone().title("Events"))
             .style(standard_style)
@@ -341,8 +336,13 @@ pub(crate) mod ui {
         let vec_details: Vec<Row> = if let Some(selected_element) = state.get_selected_element() {
             selected_element
                 .get_vecs()
-                .into_iter()
-                .map(|e| Row::new(e).bottom_margin(1))
+                .iter()
+                .map(|(k, v)| {
+                    Row::new(
+                        vec![k.to_string(), v.to_string()]
+                    )
+                    .bottom_margin(1)
+                })
                 .collect::<Vec<Row>>()
         } else {
             Vec::new()
@@ -361,7 +361,21 @@ pub(crate) mod ui {
             &mut state.details_state
         );
     
-        let editing_content = if state.buffer_modification() {
+        let editing_content = {
+            let txt: String = get_selected_details(state).unwrap_or("".to_string());
+            Spans::from(vec![Span::raw(txt)])
+        };
+    
+        let editing_view = Paragraph::new(editing_content)
+            .block(standard_block.clone().title("Details"))
+            .style(standard_style)
+            .wrap(Wrap { trim: false });
+    
+        f.render_widget(editing_view, main_view[2]);
+    
+        // Bottom Text Lane
+        //let editing_text = "";
+        let bottom_content = if state.buffer_modification() {
             Spans::from(vec![
                 Span::styled(
                     match state.focused_on {
@@ -377,17 +391,17 @@ pub(crate) mod ui {
                 )
             ])    
         } else {
-            let txt = get_selected_details(state).unwrap_or("".to_string());
+            let txt = "";
             Spans::from(vec![Span::raw(txt)])
         };
-    
-        let editing_view = Paragraph::new(editing_content)
-            .block(standard_block.clone().title("Details"))
+
+        let bottom_editor = Paragraph::new(bottom_content)
+            .block(alt_block.clone())
             .style(standard_style)
-            .wrap(Wrap { trim: false });
-    
-        f.render_widget(editing_view, main_view[2]);
-    
+            .wrap(Wrap { trim: true });
+
+        f.render_widget(bottom_editor, main_layout[2]);
+
         // Footer
         let actions_text = AppCommand::get_command_list_string().join(" ");
         let actions = Paragraph::new(actions_text)
@@ -395,6 +409,6 @@ pub(crate) mod ui {
             .style(alt_style)
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
-        f.render_widget(actions, main_layout[2]);
+        f.render_widget(actions, main_layout[3]);
     }
 }

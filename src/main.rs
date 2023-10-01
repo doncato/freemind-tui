@@ -223,6 +223,17 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                 _ => {}
             };
             // Match other keys for selection
+            if key.modifiers == KeyModifiers::SHIFT {
+                match key.code {
+                    KeyCode::Up => {
+                        engine::switch_up(&mut state);
+                    },
+                    KeyCode::Down => {
+                        engine::switch_down(&mut state);
+                    },
+                    _ => (),
+                }
+            }
             match key.code {
                 KeyCode::Esc => {
                     if state.prompt.is_some() {
