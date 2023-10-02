@@ -1,6 +1,6 @@
 pub(crate) mod engine {
     use crate::ui;
-    use crate::data::data_types::{AppState, AppConfig, AppElement, NodeName};
+    use crate::data::data_types::{AppState, AppConfig, AppElement, NodeName, AppFocus};
     use clap::{Arg, Command, ArgMatches, crate_authors, crate_description, crate_version, ArgAction};
     use std::collections::HashMap;
     use std::{fs, path::PathBuf};
@@ -34,12 +34,14 @@ pub(crate) mod engine {
 
     pub fn enable_editing(state: &mut AppState) {
         if state.details_state.selected().is_none() {
+            state.focused_on = AppFocus::Attributes;
             state.details_state.select(Some(0));
         }
     }
     
     pub fn disable_editing(state: &mut AppState) {
         if state.details_state.selected().is_some() {
+            state.focused_on = AppFocus::Elements;
             state.details_state.select(None);
         }
     }
@@ -82,7 +84,7 @@ pub(crate) mod engine {
 
     pub fn switch_down(state: &mut AppState) {
         if let Some(i) = state.list_state.selected() {
-            if i < state.get_elements().len() {
+            if i < state.get_elements().len()-1 {
                 state.get_elements_mut().swap(i, i+1);
             }
 
@@ -164,17 +166,8 @@ pub(crate) mod ui {
     };
 
     pub fn get_selected_details(state: &AppState) -> Option<String> {
-        if let Some(indx) = state.details_state.selected() {
-            let element: &AppElement = match state.get_selected_element() {
-                Some(element) => element,
-                None => return None,
-            };
-            let details = element.get_vecs();
-            if indx < details.len() {
-                Some(details[indx].1.clone())
-            } else {
-                None
-            }
+        if let Some(node) = state.get_selected_attribute() {
+            Some(node.1)
         } else {
             None
         }
@@ -403,7 +396,7 @@ pub(crate) mod ui {
         f.render_widget(bottom_editor, main_layout[2]);
 
         // Footer
-        let actions_text = AppCommand::get_command_list_string().join(" ");
+        let actions_text = AppCommand::get_command_list_string().join(" | ");
         let actions = Paragraph::new(actions_text)
             .block(alt_block)
             .style(alt_style)

@@ -312,6 +312,11 @@ pub(crate) mod data_types {
             return self.nodes.iter()
         }
 
+        /// Sets this element to modified
+        pub fn modified(&mut self) {
+            self.modified = true;
+        }
+
         /// A function that returns the App Element in a Form of Vectors
         /// where each element is another vector consisting of the key
         /// and the value. Also sorts the elements
@@ -399,10 +404,26 @@ pub(crate) mod data_types {
     }
 
     /// On which column the current acting focus is
+    #[derive(Debug, PartialEq, Eq)]
     pub enum AppFocus {
         Elements,
         Attributes,
         Edit
+    }
+
+    impl AppFocus {
+        /// Returns true if the current AppFocus is on Elements
+        pub fn elements(&self) -> bool {
+            self == &Self::Elements
+        }
+        /// Returns true if the current AppFocus is on Attributes
+        pub fn attributes(&self) -> bool {
+            self == &Self::Attributes
+        }
+        /// Returns true if the current AppFocus is on Edit
+        pub fn edit(&self) -> bool {
+            self == &Self::Edit
+        }
     }
 
     /// The current state of the app
@@ -450,21 +471,50 @@ pub(crate) mod data_types {
             &mut self.elements
         }
 
+        /// Returns the currently selected Element if available
         pub fn get_selected_element(&self) -> Option<&AppElement> {
-            if self.list_state.selected().is_none() {
-                None
+            if let Some(indx) = self.list_state.selected() {
+                self.elements.get(indx)
             } else {
-                self.elements.get(self.list_state.selected().unwrap_or(0))
+                None
             }
         }
 
+        /// Returns the currently selected Element as mutable if available
         pub fn get_selected_element_mut(&mut self) -> Option<&mut AppElement> {
-            if self.list_state.selected().is_none() {
-                None
+            if let Some(indx) = self.list_state.selected() {
+                self.elements.get_mut(indx)
             } else {
-                self.elements.get_mut(self.list_state.selected().unwrap_or(0))
+                None
             }
         }
+
+        /// Returns the currently selected attribute of the currently selected element
+        /// if available
+        pub fn get_selected_attribute(&self) -> Option<(NodeName, String)> {
+            if let Some(element) = self.get_selected_element() {
+                if let Some(indx) = self.details_state.selected() {
+                    if let Some((k, v)) = element.get_vecs().get(indx) {
+                        return Some((NodeName::from_str(&k), v.to_string()));
+                    };
+                }
+            }
+            None
+        }
+
+        /// Returns the currently selected attribute as mutable of the currently
+        /// selected element if available
+        /*
+        pub fn get_selected_attribute_mut(&mut self) -> Option<(NodeName, &mut String)> {
+            if let Some(element) = self.get_selected_element() {
+                if let Some(indx) = self.details_state.selected() {
+                    let (k, v) = &element.get_vecs()[indx];
+                    return Some((NodeName::from_str(&k), v));
+                }
+            }
+            None
+        }
+        */
 
         pub fn get_element_by_id(&mut self, id: u16) -> Option<&mut AppElement> {
             self
@@ -906,7 +956,8 @@ pub(crate) mod data_types {
             true
         }
 
-        pub fn remove_selected(&mut self) -> bool {
+        /// Removes the currently selected element, returns true on successful removal
+        pub fn remove_element(&mut self) -> bool {
             if let Some(index) = self.list_state.selected() {
                 match self.elements.get_mut(index) {
                     Some(element) => {
@@ -916,46 +967,50 @@ pub(crate) mod data_types {
                     _ => (),
                 }
             }
-            return false;
+            false
+        }
+
+        /// Removes the currently selected attribute from the currently selected element
+        /// returns true on successful removal
+        pub fn remove_attribute(&mut self) -> bool {
+            if let Some(node) = self.get_selected_attribute() {
+                if let Some(element) = self.get_selected_element_mut() {
+                    match element.nodes().remove(&node.0) {
+                        Some(_) => {
+                            element.modified();
+                            return true;
+                        },
+                        _ => (),
+                    };
+                }
+            }
+
+            false
         }
     }
 
     #[derive(PartialEq,)]
     pub enum AppCommand {
-        Add,        // A
-        Boiling,    // B
-        Config,     // C
-        Direct,     // D
+        Clear,      // C
         Edit,       // E
-        Filter,     // F
-                    // G
+        Fill,       // F
+        //Config,     // C
         Help,       // H
-                    // I, J, K
-        List,       // L
-                    // M, N, O, P
         Quit,       // Q
-        Remove,     // R
-        Sync,       // S
-        Attribute,  // T
-                    // U, V, W, X, Y
+        Refresh,    // R
         None,
     }
 
     impl ToString for AppCommand {
         fn to_string(&self) -> String {
             match self {
-                Self::Add       => "[a]dd",
-                Self::Boiling   => "[b]oiling",
-                Self::Config    => "[c]onfig",
-                Self::Direct    => "[d]irect",
+                Self::Clear     => "[c]lear",
+                Self::Fill      => "[f]ill with new",
                 Self::Edit      => "[e]dit",
-                Self::Filter    => "[f]ilter",
+                Self::Refresh   => "[r]efresh",
+                //Self::Config    => "[c]onfig",
                 Self::Help      => "[h]elp",
-                Self::List      => "[l]ist",
                 Self::Quit      => "[q]uit",
-                Self::Remove    => "[r]emove",
-                Self::Sync      => "[s]ync",
-                Self::Attribute => "a[t]tribute",
                 Self::None      => "[n]one",
             }.to_string()
         }
@@ -964,18 +1019,12 @@ pub(crate) mod data_types {
     impl From<usize> for AppCommand {
         fn from(s: usize) -> Self {
             match s {
-                0 => Self::Sync,
-                1 => Self::List,
-                2 => Self::Filter,
-                3 => Self::Edit,
-                4 => Self::Add,
-                5 => Self::Remove,
-                6 => Self::Attribute,
-                7 => Self::Direct,
-                8 => Self::Boiling,
-                9 => Self::Config,
-                10 => Self::Help,
-                11 => Self::Quit,
+                0 => Self::Refresh,
+                1 => Self::Edit,
+                2 => Self::Fill,
+                3 => Self::Clear,
+                4 => Self::Help,
+                5 => Self::Quit,
                 _ => Self::None,
             }
         }
@@ -1001,18 +1050,12 @@ pub(crate) mod data_types {
         pub fn from_key(key: KeyCode) -> Self {
             if let KeyCode::Char(val) = key {
                 match val {
-                    'a' => Self::Add,
-                    'b' => Self::Boiling,
-                    'c' => Self::Config,
-                    'd' => Self::Direct,
+                    'c' => Self::Clear,
                     'e' => Self::Edit,
-                    'f' => Self::Filter,
+                    'f' => Self::Fill,
                     'h' => Self::Help,
-                    'l' => Self::List,
+                    'r' => Self::Refresh,
                     'q' => Self::Quit,
-                    'r' => Self::Remove,
-                    's' => Self::Sync,
-                    't' => Self::Attribute,
                     _ => Self::None,
                 }
             } else {

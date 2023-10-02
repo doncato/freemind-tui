@@ -19,7 +19,7 @@ use tui::{
 };
 
 
-
+/*
 fn set_up_ui<B: Backend>(f: &mut Frame<B>) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -37,6 +37,7 @@ fn set_up_ui<B: Backend>(f: &mut Frame<B>) {
     let block = Block::default().title("Block 2").borders(Borders::ALL);
     f.render_widget(block, chunks[1]);
 }
+*/
 
 
 fn select_prev_element(state: &mut AppState) {
@@ -92,18 +93,14 @@ fn select_next_field(state: &mut AppState) {
 }
 
 fn save_changes(state: &mut AppState) {
-    if let Some(indx) = state.details_state.selected() {
-        let new_txt: String = state.modify_buffer.clone().unwrap_or("".to_string());
+    let new_txt: String = state.modify_buffer.clone().unwrap_or("".to_string());
+    if let Some(node) = state.get_selected_attribute() {
         let element: &mut AppElement = match state.get_selected_element_mut() {
             Some(element) => element,
             None => engine::create_new(state),
         };
-        match indx {
-            0 => {
-                state.message = Some("ID may not be edited manually".to_string());
-            },
-            _ => {},
-        }
+        element.nodes().insert(node.0, new_txt);
+        element.modified();
         state.unsynced();
     }
 }
@@ -115,7 +112,7 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
 
     let view = ui::ui;
 
-    loop {
+    'main: loop {
         terminal.draw(|f| view(f, &mut state))?;
         if state.prompt.is_some() {
             terminal.draw(|f| ui::prompt_ui(f, &mut state))?;
@@ -123,21 +120,23 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
 
         // Match Keyboard Events
         if let Event::Key(key) = event::read()? {
-            // Match CTRL+C
-            if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
-                return Ok(());
-            }
-            // Match whether any key was pressed
-            if key.code != KeyCode::Null {
-                // Clear Message
-                state.message = None;
-            } else {
-                // We can also savely skip further evaluation when no key was
-                // pressed
+            // Ignore if no key was pressed
+            if key.code == KeyCode::Null {
                 continue;
             }
-            // If we currently edit something we need to pass the chars:
-            if state.buffer_modification() {
+
+            // Clear Message
+            state.message = None;
+
+            // Match Events with Control
+            if key.modifiers == KeyModifiers::CONTROL {
+                match key.code {
+                    KeyCode::Char('c') | KeyCode::Char('q') => {
+                        break 'main Ok(());
+                    }
+                    _ => (),
+                }
+            } else if state.buffer_modification() { // If we currently edit something we need to pass the chars:
                 match key.code {
                     KeyCode::Esc | KeyCode::Left => {
                         state.modify_buffer = None;
@@ -159,126 +158,126 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                     KeyCode::Char(c) => {
                         if let Some(buf) = state.modify_buffer.as_mut() {
                             buf.push(
-                                if key.modifiers == KeyModifiers::SHIFT {
-                                    c.to_ascii_uppercase()
-                                } else {
-                                    c
-                                }
+                                c
                             );
                         }
                         continue;
                     },
-                    _ => {
-                        continue;
-                    },
-                }
-            }
-            // Match all keys controlling Commands functionality
-            let command: AppCommand = AppCommand::from_key(key.code);
-            match command {
-                AppCommand::Sync => {
-                    engine::sync(&mut state).await;
-                }
-                AppCommand::List => {
-                    engine::disable_editing(&mut state);
-                }
-                AppCommand::Add => {
-                    match state.focused_on {
-                        AppFocus::Elements => {
-                            engine::create_new(&mut state);
-                            engine::enable_editing(&mut state);
-                            engine::edit_selected(&mut state);
-                        },
-                        AppFocus::Attributes => {
-                            engine::create_attribute(&mut state);
-                        },
-                        _ => ()
-                    }
-                }
-                AppCommand::Remove => {
-                    match state.focused_on {
-                        AppFocus::Elements => {
-                            if state.remove_selected() {
-                                state.unsynced();
-                            };
-                        },
-                        AppFocus::Attributes => {
-
-                        },
-                        _ => ()
-                    }
-                }
-                AppCommand::Edit => {
-                    engine::enable_editing(&mut state);
-                    engine::edit_selected(&mut state);
-                }
-                AppCommand::Quit => {
-                    if state.is_synced() || state.prompt.is_some() {
-                        return Ok(())
-                    } else {
-                        state.prompt = Some("You have unsynced changes!\nDo you really want to exit?".to_string());
-                    }
-                },
-                AppCommand::None => {},
-                _ => {}
-            };
-            // Match other keys for selection
-            if key.modifiers == KeyModifiers::SHIFT {
-                match key.code {
-                    KeyCode::Up => {
-                        engine::switch_up(&mut state);
-                    },
-                    KeyCode::Down => {
-                        engine::switch_down(&mut state);
-                    },
                     _ => (),
                 }
-            }
-            match key.code {
-                KeyCode::Esc => {
-                    if state.prompt.is_some() {
-                        state.prompt = None;
+            } else if key.modifiers == KeyModifiers::SHIFT {
+                match state.focused_on {
+                    AppFocus::Elements => {
+                        match key.code {
+                            KeyCode::Up | KeyCode::Char('W') => {
+                                engine::switch_up(&mut state);
+                                select_prev_element(&mut state);
+                            },
+                            KeyCode::Down | KeyCode::Char('S') => {
+                                engine::switch_down(&mut state);
+                                select_next_element(&mut state);
+                            },
+                            _ => (),
+                        }
+                    },
+                    _ => ()
+                }
+            } else {
+                let command: AppCommand = AppCommand::from_key(key.code);
+
+                // Match all keys controlling Commands functionality
+                match command {
+                    AppCommand::Refresh => {
+                        engine::sync(&mut state).await;
                     }
-                    else if state.details_state.selected().is_some() {
-                        state.details_state.select(None);
-                    } else {
-                        state.list_state.select(None)
+                    AppCommand::Fill => {
+                        match state.focused_on {
+                            AppFocus::Elements => {
+                                engine::create_new(&mut state);
+                                engine::enable_editing(&mut state);
+                                engine::edit_selected(&mut state);
+                            },
+                            AppFocus::Attributes => {
+                                engine::create_attribute(&mut state);
+                            },
+                            _ => ()
+                        }
                     }
-                },
-                KeyCode::Enter => {
-                    if state.prompt.is_some() {
-                        state.prompt = None;
-                    } else if state.list_state.selected().is_some() && state.details_state.selected().is_none() {
+                    AppCommand::Clear => {
+                        match state.focused_on {
+                            AppFocus::Elements => {
+                                if state.remove_element() {
+                                    state.unsynced();
+                                };
+                            },
+                            AppFocus::Attributes => {
+                                if state.remove_attribute() {
+                                    state.unsynced();
+                                };
+                            },
+                            _ => ()
+                        }
+                    }
+                    AppCommand::Edit => {
                         engine::enable_editing(&mut state);
-                    } else if state.details_state.selected().is_some() {
                         engine::edit_selected(&mut state);
                     }
-                }
-                KeyCode::Up => {
-                    if state.details_state.selected().is_none() {
-                        select_prev_element(&mut state);
-                    } else {
-                        select_prev_field(&mut state);
+                    AppCommand::Quit => {
+                        if state.is_synced() || state.prompt.is_some() {
+                            return Ok(())
+                        } else {
+                            state.prompt = Some("You have unsynced changes!\nDo you really want to exit?".to_string());
+                        }
+                    },
+                    AppCommand::None => {},
+                    _ => {}
+                };
+                match key.code {
+                    KeyCode::Esc => {
+                        if state.prompt.is_some() {
+                            state.prompt = None;
+                        }
+                        else if state.details_state.selected().is_some() {
+                            state.details_state.select(None);
+                        } else {
+                            state.list_state.select(None)
+                        }
+                    },
+                    KeyCode::Enter => {
+                        if state.prompt.is_some() {
+                            state.prompt = None;
+                        } else if state.focused_on.elements() {
+                            engine::enable_editing(&mut state);
+                        } else if state.focused_on.attributes() {
+                            engine::edit_selected(&mut state);
+                        }
                     }
-                },
-                KeyCode::Down => {
-                    if state.details_state.selected().is_none() {
-                        select_next_element(&mut state);
-                    } else {
-                        select_next_field(&mut state);
+                    KeyCode::Up | KeyCode::Char('w') => {
+                        if state.focused_on.elements() {
+                            select_prev_element(&mut state);
+                        } else {
+                            select_prev_field(&mut state);
+                        }
+                    },
+                    KeyCode::Down | KeyCode::Char('s') => {
+                        if state.focused_on.elements() {
+                            select_next_element(&mut state);
+                        } else {
+                            select_next_field(&mut state);
+                        }
+                    },
+                    KeyCode::Left | KeyCode::Char('a') => {
+                        engine::disable_editing(&mut state);
                     }
-                },
-                KeyCode::Left => {
-                    engine::disable_editing(&mut state);
-                }
-                KeyCode::Right => {
-                    if state.list_state.selected().is_some() && state.details_state.selected().is_none() {
-                        engine::enable_editing(&mut state);
-                    } else if state.details_state.selected().is_some() {
-                        engine::edit_selected(&mut state);
+                    KeyCode::Right | KeyCode::Char('d') => {
+                        if state.focused_on.elements() {
+                            engine::enable_editing(&mut state);
+                        } else if state.focused_on.attributes() {
+                            engine::edit_selected(&mut state);
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
