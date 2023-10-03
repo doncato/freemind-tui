@@ -2,20 +2,18 @@ mod app;
 use crate::app::{engine, ui};
 
 mod data;
-use crate::data::data_types::{AppState, AppConfig, AppElement, AppCommand};
+use crate::data::data_types::{AppState, AppConfig, AppCommand};
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use data::data_types::{AppFocus, NodeName};
+use data::data_types::AppFocus;
 use std::io;
 use tui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout},
-    widgets::{Block, Borders},
-    Frame, Terminal, 
+    Terminal, 
 };
 
 
@@ -92,18 +90,6 @@ fn select_next_field(state: &mut AppState) {
     state.details_state.select(Some(a));
 }
 
-fn save_changes(state: &mut AppState) {
-    let new_txt: String = state.modify_buffer.clone().unwrap_or("".to_string());
-    if let Some(node) = state.get_selected_attribute() {
-        let element: &mut AppElement = match state.get_selected_element_mut() {
-            Some(element) => element,
-            None => engine::create_new(state),
-        };
-        element.nodes().insert(node.0, new_txt);
-        element.modified();
-        state.unsynced();
-    }
-}
 
 async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) -> io::Result<()> {
     let mut state: AppState = AppState::new(cfg);
@@ -136,32 +122,19 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                     }
                     _ => (),
                 }
-            } else if state.buffer_modification() { // If we currently edit something we need to pass the chars:
+            } else if state.is_editing() { // If we currently edit something we need to pass the chars:
                 match key.code {
                     KeyCode::Esc | KeyCode::Left => {
-                        state.modify_buffer = None;
-                        continue;
+                        state.abort_editing();
                     },
-                    KeyCode::Enter | KeyCode::Up | KeyCode::Down => {
-                        save_changes(&mut state);
-                        state.modify_buffer = None;
-                        if key.code == KeyCode::Enter {
-                            continue;
-                        }
+                    KeyCode::Enter => {// | KeyCode::Up | KeyCode::Down => {
+                        state.save_changes();
                     },
                     KeyCode::Backspace => {
-                        if let Some(buf) = state.modify_buffer.as_mut() {
-                            buf.pop();
-                        }
-                        continue;
+                        state.pop_edit();
                     }
                     KeyCode::Char(c) => {
-                        if let Some(buf) = state.modify_buffer.as_mut() {
-                            buf.push(
-                                c
-                            );
-                        }
-                        continue;
+                        state.push_edit(c);
                     },
                     _ => (),
                 }
@@ -193,7 +166,7 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                     AppCommand::Fill => {
                         match state.focused_on {
                             AppFocus::Elements => {
-                                engine::create_new(&mut state);
+                                state.create_new_element();
                                 engine::enable_editing(&mut state);
                                 engine::edit_selected(&mut state);
                             },
@@ -285,6 +258,9 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
 
 #[tokio::main]
 async fn main() -> Result<(), io::Error> {
+    // Delete when finished
+    println!("TODO: CHANGE THE edit_entries function at data.rs:868:9 IT DOES NOT WORK PROPERLY ANYMORE");
+
     // Obtain Config
     let config: AppConfig = engine::init();
 

@@ -1,8 +1,7 @@
 pub(crate) mod engine {
     use crate::ui;
-    use crate::data::data_types::{AppState, AppConfig, AppElement, NodeName, AppFocus};
+    use crate::data::data_types::{AppState, AppConfig, AppElement, AppFocus};
     use clap::{Arg, Command, ArgMatches, crate_authors, crate_description, crate_version, ArgAction};
-    use std::collections::HashMap;
     use std::{fs, path::PathBuf};
 
 
@@ -45,18 +44,6 @@ pub(crate) mod engine {
             state.details_state.select(None);
         }
     }
-    
-    pub fn create_new(state: &mut AppState) -> &mut AppElement {
-        let len = state.get_elements().len();
-        let new_element: AppElement = AppElement::new(
-            None,
-            HashMap::new(),
-        );
-        state.push(Some(new_element));
-        let indx = len-1;
-        state.list_state.select(Some(indx));
-        return state.get_selected_element_mut().expect("FATAL New element not found");
-    }
 
     pub fn create_attribute(state: &mut AppState) -> () {
         let element: &AppElement = match state.get_selected_element() {
@@ -68,9 +55,7 @@ pub(crate) mod engine {
     }
     
     pub fn edit_selected(state: &mut AppState) {
-        if let Some(indx) = state.details_state.selected() {
-            state.modify_buffer = ui::get_selected_details(state);
-        }
+        state.set_edit(ui::get_selected_details(state));
     }
 
     pub fn switch_up(state: &mut AppState) {
@@ -154,9 +139,8 @@ pub(crate) mod engine {
     }
 }
 pub(crate) mod ui {
-    use crate::{AppState, AppCommand, AppElement, data::data_types::AppFocus};
+    use crate::{AppState, AppCommand, data::data_types::AppFocus};
     use clap::{crate_name, crate_version};
-    use chrono::{Utc, LocalResult, TimeZone};
     use tui::{
         style::Style,
         backend::{Backend},
@@ -368,7 +352,7 @@ pub(crate) mod ui {
     
         // Bottom Text Lane
         //let editing_text = "";
-        let bottom_content = if state.buffer_modification() {
+        let bottom_content = if state.is_editing() {
             Spans::from(vec![
                 Span::styled(
                     match state.focused_on {
@@ -377,7 +361,7 @@ pub(crate) mod ui {
                     },
                     Style::default().add_modifier(Modifier::BOLD)
                 ),
-                Span::raw(state.modify_buffer.clone().unwrap_or("".to_string())),
+                Span::raw(state.get_edit().unwrap_or("".to_string())),
                 Span::styled(
                     "_",
                     Style::default().add_modifier(Modifier::SLOW_BLINK)

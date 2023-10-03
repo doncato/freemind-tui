@@ -1,6 +1,5 @@
 pub(crate) mod data_types {
     use std::{fmt, io::Cursor, str, collections::{HashMap, hash_map::Iter}};
-    use chrono::{TimeZone, Utc, LocalResult};
     use crossterm::event::KeyCode;
     use serde::{Serialize, Deserialize};
     use reqwest::{Client, Response, header::HeaderValue};
@@ -9,19 +8,22 @@ pub(crate) mod data_types {
     use tui::{widgets::{ListItem, ListState, TableState}, style::{Modifier, Style}};
 
     /// Gets the value of the id attribute of any node
-    fn get_id_attribute<'a>(reader: &Reader<&[u8]>, element: BytesStart<'a>) -> Result<Option<u16>, quick_xml::Error> {
-        for attribute in element.attributes() {
-            if let Ok(val) = attribute {
-                if val.key.local_name().as_ref() == b"id" {
-                    let v = val.decode_and_unescape_value(&reader)?.to_string();
-                    return match v.parse::<u16>() {
-                        Ok(val) => Ok(Some(val)),
-                        Err(_) => Ok(None),
-                    }
+    fn get_id_attribute<'a>(reader: &Reader<&[u8]>, element: &BytesStart<'a>) -> Option<u16> {
+        element
+            .attributes()
+            .into_iter()
+            .filter_map(|f| f.ok())
+            .filter(|e| e.key.local_name().as_ref() == b"id")
+            .map(|v| {
+                if let Ok(mut attr) = v.decode_and_unescape_value(&reader) {
+                    attr = attr.into();
+                    attr.parse::<u16>().ok()
+                } else {
+                    None
                 }
-            }
-        }
-        Ok(None)
+            })
+            .next()
+            .flatten()
     }
 
     #[derive(Debug, Clone)]
@@ -92,7 +94,7 @@ pub(crate) mod data_types {
             loop {
                 match reader.read_event_into(&mut buf)? {
                     Event::Start(e) if e.name().as_ref() == b"entry" => {
-                        in_element = get_id_attribute(&reader, e)?;
+                        in_element = get_id_attribute(&reader, &e);
                     }
                     Event::End(e) if e.name().as_ref() == b"entry" => {
                         if in_element.is_some() {
@@ -437,7 +439,7 @@ pub(crate) mod data_types {
         pub details_state: TableState,
         pub prompt: Option<String>,
         pub message: Option<String>,
-        pub modify_buffer: Option<String>,
+        modification_buffer: Option<String>,
     }
 
     impl AppState {
@@ -452,13 +454,14 @@ pub(crate) mod data_types {
                 details_state: TableState::default(),
                 prompt: None,
                 message: None,
-                modify_buffer: None,
+                modification_buffer: None,
             }
         }
 
-        /// Checks whether there are pending changes in the modification buffer
-        pub fn buffer_modification(&self) -> bool {
-            return self.modify_buffer.is_some();
+        /// Checks if we are currently Editing by checking whether the modification
+        /// buffer is some
+        pub fn is_editing(&self) -> bool {
+            return self.modification_buffer.is_some();
         }
 
         /// Returns All AppElements from the state as a Vec
@@ -502,20 +505,65 @@ pub(crate) mod data_types {
             None
         }
 
-        /// Returns the currently selected attribute as mutable of the currently
-        /// selected element if available
-        /*
-        pub fn get_selected_attribute_mut(&mut self) -> Option<(NodeName, &mut String)> {
-            if let Some(element) = self.get_selected_element() {
-                if let Some(indx) = self.details_state.selected() {
-                    let (k, v) = &element.get_vecs()[indx];
-                    return Some((NodeName::from_str(&k), v));
-                }
-            }
-            None
+        /// Creates a new blank AppElement, adds it to the current state and returns it
+        pub fn create_new_element(self: &mut AppState) -> &mut AppElement {
+            let len = self.get_elements().len();
+            let new_element: AppElement = AppElement::new(
+                None,
+                HashMap::new(),
+            );
+            self.push(Some(new_element));
+            let indx = len-1;
+            self.list_state.select(Some(indx));
+            return self.get_selected_element_mut().expect("FATAL Newly created element not found");
         }
-        */
 
+        /// Gets the current Modification Buffer if we currently edit
+        pub fn get_edit(&self) -> Option<String> {
+            return self.modification_buffer.clone();
+        }
+
+        /// Sets the current Modification Buffer to the specified value
+        pub fn set_edit(&mut self, value: Option<String>) {
+            self.modification_buffer = value;
+        }
+
+        /// Push the char value into the modifications buffer to the end
+        pub fn push_edit(&mut self, value: char) {
+            if let Some(buf) = &mut self.modification_buffer {
+                buf.push(value);
+            }
+        }
+
+        /// Removes the last char from the modifications buffer
+        pub fn pop_edit(&mut self) {
+            if let Some(buf) = &mut self.modification_buffer {
+                buf.pop();
+            }
+        }
+
+        /// Exits the editing mode and leaves everything untouchtd (hopefully)
+        pub fn abort_editing(&mut self) {
+            self.modification_buffer = None;
+        }
+
+        /// Saves the current Modification Buffer to the currently selected node
+        /// and exits the editing mode
+        pub fn save_changes(self: &mut AppState) {
+            let new_txt: String = self.get_edit().unwrap_or("".to_string());
+            if let Some(node) = self.get_selected_attribute() {
+                let element: &mut AppElement = match self.get_selected_element_mut() {
+                    Some(element) => element,
+                    None => self.create_new_element(),
+                };
+                element.nodes().insert(node.0, new_txt);
+                element.modified();
+                self.unsynced();
+                self.modification_buffer = None;
+            }
+        }
+
+        /// Finds and Returns an element defined by it's id
         pub fn get_element_by_id(&mut self, id: u16) -> Option<&mut AppElement> {
             self
                 .elements
@@ -523,6 +571,7 @@ pub(crate) mod data_types {
                 .find(|e| e.id == Some(id))
         }
 
+        /// Returns all IDs present in the current appstate
         pub fn get_ids(&self, ignore_removed: bool) -> Vec<u16> {
             return self.elements
                 .clone()
@@ -565,7 +614,7 @@ pub(crate) mod data_types {
         /// Returns a string that supposes to indicate whether modifications
         /// have been made to the local state
         pub fn modified_string(&self) -> String {
-            if self.buffer_modification() {
+            if self.is_editing() {
                 "editing"
             } else {
                 match self.synced {
@@ -734,27 +783,17 @@ pub(crate) mod data_types {
                     }
                     Ok(Event::Start(e)) if e.name().as_ref() == b"entry" => {
                         let mut write = true;
-                        e
-                            .attributes()
-                            .into_iter()
-                            .filter_map(|f| f.ok())
-                            .for_each(|val| {
-                                if val.key.local_name().as_ref() == b"id" {
-                                    if let Ok(v) = val.decode_and_unescape_value(&reader) {
-                                        if let Ok(v) = v.to_string().parse::<u16>() {
-                                            if let Some(pos) = self.elements.iter().position(|e| e.id == Some(v)) {
-                                                if self.elements[pos].removed {
-                                                    self.elements.remove(pos);
-                                                    ffwd = true;
-                                                    skip = e.to_owned();
-                                                    modified = true;
-                                                    write = false;
-                                                };
-                                            };
-                                        };
-                                    };
+                        if let Some(v) = get_id_attribute(&reader, &e) {
+                            if let Some(pos) = self.elements.iter().position(|e| e.id == Some(v)) {
+                                if self.elements[pos].removed {
+                                    self.elements.remove(pos);
+                                    ffwd = true;
+                                    skip = e.to_owned();
+                                    modified = true;
+                                    write = false;
                                 };
-                            });
+                            };
+                        }
                         if write {
                             writer.write_event(Event::Start(e.to_owned()))?;
                         }
@@ -823,6 +862,7 @@ pub(crate) mod data_types {
             ).unwrap().to_string()
         }
 
+        /// TODO: CHANGE THIS IT DOES NOT WORK PROPERLY ANYMORE
         /// Takes the whole XML Document and edits Entries that are marked to be
         /// in an edited state
         fn edit_entries(&mut self, xml: String) -> Result<(bool, String), quick_xml::Error> {
