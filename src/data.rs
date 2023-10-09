@@ -871,21 +871,60 @@ pub(crate) mod data_types {
             let mut reader = Reader::from_str(&xml);
             let mut writer = Writer::new(Cursor::new(Vec::new()));
 
-            let mut change_this: bool = false;
+            let mut change_element: Option<AppElement> = None;
             let mut skip: BytesStart = BytesStart::new("");
             let mut skip_subtag: BytesStart = BytesStart::new("");
 
             loop {
                 match reader.read_event() {
-                    Ok(Event::Start(e)) if change_this => {
-                        match e.name().as_ref() {
-                            b"name" | b"description" | b"due" | b"tags" => {
+                    Ok(Event::Start(e)) => {
+                        if change_element.is_some() {
+                            let exists: bool = change_element
+                                .unwrap()
+                                .nodes
+                                .contains_key(
+                                    &NodeName::from_str(
+                                        str::from_utf8(e
+                                            .name()
+                                            .as_ref()
+                                        ).unwrap_or("")
+                                    )
+                                );
+                            if exists {
                                 skip_subtag = e.to_owned();
-                            },
-                            _ => {
+                            } else {
                                 if skip_subtag == BytesStart::new("") {
                                     writer.write_event(Event::Start(e.to_owned()))?
                                 }
+                            }
+                        } else if e.name().as_ref() == b"entry" {
+                            let mut write: bool = true;
+                            e
+                                .attributes()
+                                .into_iter()
+                                .filter_map(|f| f.ok())
+                                .for_each(|val| {
+                                    if val.key.local_name().as_ref() == b"id" {
+                                        if let Ok(v) = val.decode_and_unescape_value(&reader) {
+                                            if let Ok(v) = v.to_string().parse::<u16>() {
+                                                if let Some(element) = self.get_element_by_id(v) {
+                                                    if element.modified {
+                                                        element.modified = false;
+                                                        write = false;
+                                                        modified = true;
+                                                        change_element= Some(element.clone());
+                                                        skip = e.to_owned();
+
+                                                        writer.write_event(Event::Start(e.to_owned())).unwrap();
+                                                        element.write(&mut writer, false).unwrap();
+                                                    }
+                                                };
+                                            };
+                                        };
+                                    };
+                                });
+                            if write {
+                                writer.write_event(Event::Start(e.to_owned()))?;        
                             }
                         }
                     },
@@ -904,7 +943,7 @@ pub(crate) mod data_types {
                                                     element.modified = false;
                                                     write = false;
                                                     modified = true;
-                                                    change_this = true;
+                                                    change_element= Some(element.clone());
                                                     skip = e.to_owned();
 
                                                     writer.write_event(Event::Start(e.to_owned())).unwrap();
@@ -923,7 +962,7 @@ pub(crate) mod data_types {
                         skip_subtag = BytesStart::new("");
                     }
                     Ok(Event::End(e)) if e == skip.to_end() => {
-                        change_this = false;
+                        change_element = None;
                         skip = BytesStart::new("");
                         writer.write_event(Event::End(e.to_owned()))?;
                     },
