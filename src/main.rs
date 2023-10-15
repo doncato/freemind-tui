@@ -122,12 +122,14 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                     }
                     _ => (),
                 }
-            } else if state.is_editing() { // If we currently edit something we need to pass the chars:
+            } else if state.focused_on == AppFocus::Edit { // If we currently edit something we need to pass the chars:
                 match key.code {
                     KeyCode::Esc | KeyCode::Left => {
+                        state.focused_on = AppFocus::Attributes;
                         state.abort_editing();
                     },
-                    KeyCode::Enter => {// | KeyCode::Up | KeyCode::Down => {
+                    KeyCode::Enter => {
+                        state.focused_on = AppFocus::Attributes;
                         state.save_changes();
                     },
                     KeyCode::Backspace => {
@@ -167,7 +169,7 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                         match state.focused_on {
                             AppFocus::Elements => {
                                 state.create_new_element();
-                                engine::enable_editing(&mut state);
+                                state.focused_on = AppFocus::Edit;
                                 engine::edit_selected(&mut state);
                             },
                             AppFocus::Attributes => {
@@ -192,8 +194,8 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                         }
                     }
                     AppCommand::Edit => {
-                        engine::enable_editing(&mut state);
-                        engine::edit_selected(&mut state);
+                        state.focused_on = AppFocus::Edit;
+                        state.set_edit(ui::get_selected_details(&state));
                     }
                     AppCommand::Quit => {
                         if state.is_synced() || state.prompt.is_some() {
@@ -219,10 +221,17 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                     KeyCode::Enter => {
                         if state.prompt.is_some() {
                             state.prompt = None;
-                        } else if state.focused_on.elements() {
-                            engine::enable_editing(&mut state);
-                        } else if state.focused_on.attributes() {
-                            engine::edit_selected(&mut state);
+                        } else {
+                            match state.focused_on {
+                                AppFocus::Elements => {
+                                    state.focused_on = AppFocus::Attributes;
+                                },
+                                AppFocus::Attributes => {
+                                    state.focused_on = AppFocus::Edit;
+                                    engine::edit_selected(&mut state);
+                                },
+                                _ => {}
+                            }
                         }
                     }
                     KeyCode::Up | KeyCode::Char('w') => {
@@ -240,27 +249,56 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                         }
                     },
                     KeyCode::Left | KeyCode::Char('a') => {
-                        engine::disable_editing(&mut state);
+                        match state.focused_on {
+                            AppFocus::Edit => {
+                                state.focused_on = AppFocus::Attributes
+                            },
+                            AppFocus::Attributes => {
+                                state.focused_on = AppFocus::Elements
+                            },
+                            _ => {}
+                        }
                     }
                     KeyCode::Right | KeyCode::Char('d') => {
-                        if state.focused_on.elements() {
-                            engine::enable_editing(&mut state);
-                        } else if state.focused_on.attributes() {
-                            engine::edit_selected(&mut state);
+                        match state.focused_on {
+                            AppFocus::Elements => {
+                                state.focused_on = AppFocus::Attributes;
+                            },
+                            AppFocus::Attributes => {
+                                state.focused_on = AppFocus::Edit;
+                                engine::edit_selected(&mut state);
+                            },
+                            _ => {}
                         }
                     }
                     _ => {}
                 }
             }
         }
+
+        // Do other processing
+        match state.focused_on {
+            AppFocus::Elements => {
+                if state.details_state.selected().is_some() {
+                    state.details_state.select(None);
+                }
+            },
+            AppFocus::Attributes => {
+                if state.details_state.selected().is_none() {
+                    state.details_state.select(Some(0))
+                }
+            },
+            AppFocus::Edit => {
+                if state.get_edit().is_none() {
+                    state.set_edit(Some("".to_string()))
+                }
+            },
+        }
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), io::Error> {
-    // Delete when finished
-    println!("TODO: CHANGE THE edit_entries function at data.rs:868:9 IT DOES NOT WORK PROPERLY ANYMORE");
-
     // Obtain Config
     let config: AppConfig = engine::init();
 

@@ -81,14 +81,10 @@ pub(crate) mod data_types {
             let mut reader = Reader::from_str(xml);
             reader.trim_text(true);
 
-            let mut obj_count: u16 = 0;
-
+            //let mut obj_count: u16 = 0;
             let mut in_element: Option<u16> = None;
-
             let mut inside: String = "".to_string();
-
             let mut next_map: HashMap<NodeName, String> = HashMap::new();
-
             let mut buf = Vec::new();
 
             loop {
@@ -100,7 +96,7 @@ pub(crate) mod data_types {
                         if in_element.is_some() {
                             self.nodes.push(Node::Element(AppElement::new(in_element, next_map.clone())));
                             next_map.clear();
-                            obj_count += 1;
+                            //obj_count += 1;
                             in_element = None;
                         }
 
@@ -246,6 +242,12 @@ pub(crate) mod data_types {
                 Some(id) => Some(id) == other.id,
                 None => self == other, // Isn't this recursive???
             }
+        }
+    }
+
+    impl AsRef<Self> for AppElement {
+        fn as_ref(&self) -> &Self {
+            return &self;
         }
     }
 
@@ -624,63 +626,6 @@ pub(crate) mod data_types {
             }.to_string()
         }
 
-
-        /// Retreives the requested id directly from the server and returns a string
-        /// with the content:
-        pub async fn live_get_by_id(&mut self, id: u16) -> Result<String, reqwest::Error> {
-            self.handle_empty_client();
-            let mut result: String = String::new();
-            
-            let res: Response = self.call(&format!("/xml/get_by_id/{}", id), "".to_string()).await?;
-            let headers = res.headers();
-            
-            if headers.get("content-type") != Some(&HeaderValue::from_static("text/xml")) {
-                return Ok(result);
-            }
-            
-            let xml: String = res.text().await?;
-
-            //println!("{}", xml);
-            let mut reader = Reader::from_str(&xml);
-            
-            reader.trim_text(true);
-
-            let mut enabled: bool = false;
-            let mut indentation: usize = 0;
-
-            loop {
-                match reader.read_event() {
-                    Ok(Event::Start(e)) if e.name().as_ref() == b"entry" => {
-                        // We expect just one entry here so it is fine to do it this way
-                        enabled = true;
-                    },
-                    Ok(Event::End(e)) if e.name().as_ref() == b"entry" => {
-                        enabled = false;
-                    },
-                    Ok(Event::Start(e)) if enabled => {
-                        result.push_str("\n");
-                        result.push_str(&" ".repeat(indentation));
-                        result.push_str(str::from_utf8(e.name().as_ref()).unwrap_or(""));
-                        result.push_str(": ");
-                        indentation += 1;
-                    }
-                    Ok(Event::Text(txt)) if enabled => {
-                        result.push_str(
-                            &txt.unescape().unwrap()
-                        );
-                    }
-                    Ok(Event::End(_)) if enabled => {
-                        indentation -= 1;
-                    }
-                    Ok(Event::Eof) => break,
-                    Err(_) => break,
-                    _ => ()
-                }
-            }
-
-            Ok(result)
-        }
-
         fn handle_empty_client(&mut self) {
             if self.client.is_none() {
                 self.client = Some(
@@ -871,16 +816,15 @@ pub(crate) mod data_types {
             let mut reader = Reader::from_str(&xml);
             let mut writer = Writer::new(Cursor::new(Vec::new()));
 
-            let mut change_element: Option<AppElement> = None;
+            let mut change_element: Option<u16> = None;
             let mut skip: BytesStart = BytesStart::new("");
             let mut skip_subtag: BytesStart = BytesStart::new("");
 
             loop {
                 match reader.read_event() {
                     Ok(Event::Start(e)) => {
-                        if change_element.is_some() {
-                            let exists: bool = change_element
-                                .unwrap()
+                        if let Some(element) = self.get_element_by_id(change_element.unwrap_or(0)) {
+                            if element
                                 .nodes
                                 .contains_key(
                                     &NodeName::from_str(
@@ -889,73 +833,30 @@ pub(crate) mod data_types {
                                             .as_ref()
                                         ).unwrap_or("")
                                     )
-                                );
-                            if exists {
-                                skip_subtag = e.to_owned();
-                            } else {
-                                if skip_subtag == BytesStart::new("") {
-                                    writer.write_event(Event::Start(e.to_owned()))?
+                                ) {
+                                    skip_subtag = e.to_owned();
+                                } else {
+                                    if skip_subtag == BytesStart::new("") {
+                                        writer.write_event(Event::Start(e.to_owned()))?
+                                    }    
                                 }
-                            }
                         } else if e.name().as_ref() == b"entry" {
-                            let mut write: bool = true;
-                            e
-                                .attributes()
-                                .into_iter()
-                                .filter_map(|f| f.ok())
-                                .for_each(|val| {
-                                    if val.key.local_name().as_ref() == b"id" {
-                                        if let Ok(v) = val.decode_and_unescape_value(&reader) {
-                                            if let Ok(v) = v.to_string().parse::<u16>() {
-                                                if let Some(element) = self.get_element_by_id(v) {
-                                                    if element.modified {
-                                                        element.modified = false;
-                                                        write = false;
-                                                        modified = true;
-                                                        change_element= Some(element.clone());
-                                                        skip = e.to_owned();
+                            writer.write_event(Event::Start(e.to_owned())).unwrap();
 
-                                                        writer.write_event(Event::Start(e.to_owned())).unwrap();
-                                                        element.write(&mut writer, false).unwrap();
-                                                    }
-                                                };
-                                            };
-                                        };
-                                    };
-                                });
-                            if write {
-                                writer.write_event(Event::Start(e.to_owned()))?;        
-                            }
-                        }
-                    },
-                    Ok(Event::Start(e)) if e.name().as_ref() == b"entry" => {
-                        let mut write: bool = true;
-                        e
-                            .attributes()
-                            .into_iter()
-                            .filter_map(|f| f.ok())
-                            .for_each(|val| {
-                                if val.key.local_name().as_ref() == b"id" {
-                                    if let Ok(v) = val.decode_and_unescape_value(&reader) {
-                                        if let Ok(v) = v.to_string().parse::<u16>() {
-                                            if let Some(element) = self.get_element_by_id(v) {
-                                                if element.modified {
-                                                    element.modified = false;
-                                                    write = false;
-                                                    modified = true;
-                                                    change_element= Some(element.clone());
-                                                    skip = e.to_owned();
+                            if let Some(id) = get_id_attribute(&reader, &e) {
+                                if let Some(element) = self.get_element_by_id(id) {
+                                    if element.modified {
+                                        element.modified = false;
+                                        modified = true;
+                                        change_element = Some(id);
+                                        skip = e.to_owned();
 
-                                                    writer.write_event(Event::Start(e.to_owned())).unwrap();
-                                                    element.write(&mut writer, false).unwrap();
-                                                }
-                                            };
-                                        };
-                                    };
+                                        element.write(&mut writer, false)?;
+                                    }
                                 };
-                            });
-                        if write {
-                            writer.write_event(Event::Start(e.to_owned()))?;        
+                            };
+                        } else {
+                            writer.write_event(Event::Start(e.to_owned())).unwrap();
                         }
                     },
                     Ok(Event::End(e)) if e == skip_subtag.to_end() => {
@@ -993,10 +894,11 @@ pub(crate) mod data_types {
         pub async fn sync(&mut self) -> Result<(), reqwest::Error> {
             let result = self.fetch().await?;
 
-            let (entries_deleted, answer) = self
+            let (entries_deleted, mut answer) = self
                 .delete_removed(result.to_string())
                 .unwrap_or((false, result));
 
+            //let entries_modified = false;
             let (entries_modified, mut answer) = self.edit_entries(answer).unwrap();
 
             let fetched_registry: Registry = Registry::empty().from_string(&answer).unwrap();

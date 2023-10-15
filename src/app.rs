@@ -37,13 +37,6 @@ pub(crate) mod engine {
             state.details_state.select(Some(0));
         }
     }
-    
-    pub fn disable_editing(state: &mut AppState) {
-        if state.details_state.selected().is_some() {
-            state.focused_on = AppFocus::Elements;
-            state.details_state.select(None);
-        }
-    }
 
     pub fn create_attribute(state: &mut AppState) -> () {
         let element: &AppElement = match state.get_selected_element() {
@@ -352,24 +345,32 @@ pub(crate) mod ui {
     
         // Bottom Text Lane
         //let editing_text = "";
-        let bottom_content = if state.is_editing() {
+        let bottom_content = {
             Spans::from(vec![
                 Span::styled(
                     match state.focused_on {
-                        AppFocus::Attributes => {"New Attribute: "},
-                        _ => { "New Value: " }
+                        AppFocus::Elements => {
+                            "LST "
+                        },
+                        AppFocus::Attributes => {
+                            "ATR "
+                        },
+                        AppFocus::Edit => {
+                            "INS: "
+                        },
                     },
                     Style::default().add_modifier(Modifier::BOLD)
                 ),
                 Span::raw(state.get_edit().unwrap_or("".to_string())),
-                Span::styled(
-                    "_",
-                    Style::default().add_modifier(Modifier::SLOW_BLINK)
-                )
+                if state.is_editing() {
+                    Span::styled(
+                        "_",
+                        Style::default().add_modifier(Modifier::SLOW_BLINK)
+                    )
+                } else {
+                    Span::raw("")
+                }
             ])    
-        } else {
-            let txt = "";
-            Spans::from(vec![Span::raw(txt)])
         };
 
         let bottom_editor = Paragraph::new(bottom_content)
