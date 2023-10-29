@@ -1,5 +1,5 @@
 pub(crate) mod engine {
-    use crate::data::data_types::{AppState, AppConfig, AppElement};
+    use crate::data::data_types::{AppState, AppConfig};
     use clap::{Arg, Command, ArgMatches, crate_authors, crate_description, crate_version, ArgAction};
     use std::{fs, path::PathBuf};
 
@@ -24,23 +24,6 @@ pub(crate) mod engine {
     }
     */
 
-    /// Syncs the current app state with the configured remote
-    /// returns true on success, false on failure
-    pub async fn sync(state: &mut AppState) -> bool {
-        state.sync().await.is_err()
-    }
-
-    pub fn create_attribute(state: &mut AppState) -> () {
-        state.set_edit(Some("".to_string()));
-        /*
-        let element: &AppElement = match state.get_selected_element() {
-            Some(element) => element,
-            None => return (),
-        };
-        */
-        //element.attributes.push(String::new(), String::new());
-
-    }
 
     pub fn switch_up(state: &mut AppState) {
         if let Some(i) = state.list_state.selected() {
@@ -123,22 +106,66 @@ pub(crate) mod engine {
     }
 }
 pub(crate) mod ui {
+    use std::str::FromStr;
+
     use crate::{AppState, AppCommand, data::data_types::AppFocus};
+    use cron::Schedule;
+    use chrono::{TimeZone, Utc, LocalResult, Local};
     use clap::{crate_name, crate_version};
     use tui::{
         style::Style,
         backend::{Backend},
-        layout::{Constraint, Direction, Layout, Alignment},
+        layout::{Constraint, Direction, Layout, Alignment, Rect},
         widgets::{Block, Borders, Paragraph, Wrap, List, ListItem, BorderType, Row, Table},
         Frame, text::{Spans, Span}, style::{Color, Modifier}, 
     };
 
-    pub fn get_selected_details(state: &AppState) -> Option<String> {
+    /// Takes a timestamp and converts it to a Human Readable string in the current
+    /// timezone
+    fn display_timestamp(timestamp: i64) -> String {
+        let due: String = match Utc.timestamp_opt(timestamp, 0) {
+            LocalResult::None => "None".to_string(),
+            LocalResult::Single(val) => val.with_timezone(&chrono::Local).to_rfc2822(),
+            LocalResult::Ambiguous(val, _) => val.with_timezone(&chrono::Local).to_rfc2822(),
+        };
+        due
+    }
+
+    /// Returns the value of the currently selected attribute of node
+    pub fn get_selected_value(state: &AppState) -> Option<String> {
         if let Some(node) = state.get_selected_attribute() {
             Some(node.1)
         } else {
             None
         }
+    }
+
+    /// Returns a Hashmap that maps different representations of the value
+    /// of the currently selected attribute
+    pub fn get_selected_details(state: &AppState) -> Vec<(String, String)> {
+        let mut cnt: Vec<(String, String)> = Vec::new();
+        if let Some(node) = state.get_selected_attribute() {
+            cnt.push(("Raw".to_string(), node.1.clone()));
+
+            let value: String = node.1;
+
+            if let Some(num_val) = value.parse::<i64>().ok() {
+                let due = display_timestamp(num_val);
+                cnt.push(("As UNIX Timestamp".to_string(), due));
+            }
+
+            if let Ok(schedule) = Schedule::from_str(&value) {
+                let next_events: Vec<String> = schedule
+                    .upcoming(Local)
+                    .take(5)
+                    .map(|e| {
+                        e.to_rfc2822()
+                    })
+                    .collect();
+                cnt.push(("As cron expression".to_string(), next_events.join("\n")));
+            }
+        }
+        cnt
     }
 
     pub fn prompt_ui<B: Backend>(f: &mut Frame<B>, state: &mut AppState) {
@@ -190,7 +217,199 @@ pub(crate) mod ui {
     
     }
 
+    /// Builds the top bar of the layout
+    fn build_top_bar<'a, B: tui::backend::Backend>(f: &mut Frame<B>, layout: Rect, state: &mut AppState, block: Block<'a>, style: &Style) {
+        let top_bar: Vec<Rect> = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(
+                    [
+                        Constraint::Percentage(50),
+                        Constraint::Percentage(50),
+                    ]
+                    .as_ref(),
+                )
+                .split(layout);
+        
+            let top_left_text: String = format!(
+                ":// {} {} - {}",
+                crate_name!(),
+                crate_version!(),
+                state.modified_string()
+            );
+            let top_left: Paragraph<'_> = Paragraph::new(top_left_text)
+                .block(block.clone())
+                .style(*style)
+                .alignment(Alignment::Left)
+                .wrap(Wrap { trim: true });
+            
+            let top_right_text: &str = state
+            .message
+                .unwrap_or("");
+            
+            let top_right = Paragraph::new(top_right_text)
+            .block(block)
+            .style(*style)
+            .alignment(Alignment::Right)
+            .wrap(Wrap { trim: true });
+        
+        
+            f.render_widget(top_left, top_bar[0]);
+            f.render_widget(top_right, top_bar[1]);
+    }
+
+    /// Build main view of the layout
+    fn build_main_view<'a, B: tui::backend::Backend>(f: &mut Frame<B>, layout: Rect, state: &mut AppState, block: Block<'a>, style: &Style) {
+        let main_view = Layout::default()
+            .direction(Direction::Horizontal)
+            .margin(0)
+            .constraints(
+                [
+                    Constraint::Percentage(15),
+                    Constraint::Percentage(55),
+                    Constraint::Percentage(30)
+                ]
+                .as_ref(),
+            )
+            .split(layout);
+    
+        let elements: Vec<ListItem<'_>> = state
+            .get_elements()
+            .iter()
+            .map(|e| e.to_list_item())
+            .collect();
+
+        let elements_list = List::new(elements)
+            .block(block.clone().title("Events"))
+            .style(*style)
+            .highlight_style(
+                Style::default()
+                .add_modifier(Modifier::REVERSED)
+            );
+        f.render_stateful_widget(
+            elements_list,
+            main_view[0],
+            &mut state.list_state
+        );
+        
+        let vec_details: Vec<Row> = if let Some(selected_element) = state.get_selected_element() {
+            selected_element
+                .get_vecs()
+                .iter()
+                .map(|(k, v)| {
+                    Row::new(
+                        vec![k.to_string(), v.to_string()]
+                    )
+                    .bottom_margin(1)
+                })
+                .collect::<Vec<Row>>()
+        } else {
+            Vec::new()
+        };
+    
+        let attributes_table = Table::new(vec_details)
+            .block(block.clone().title("Attributes"))
+            .widths(&[Constraint::Percentage(30), Constraint::Percentage(70)])
+            .column_spacing(1)
+            .style(*style)
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        
+        f.render_stateful_widget(
+            attributes_table,
+            main_view[1],
+            &mut state.details_state
+        );
+    
+        let details_content = {
+            let style = Style::default()
+                .add_modifier(Modifier::ITALIC);
+
+            let content: Vec<(String, String)> = get_selected_details(state);
+
+            let content_spans: Vec<Spans<'_>> = content
+                .into_iter()
+                .map(|e| {
+                    let mut key: String = e.0;
+                    let value: String = e.1;
+
+                    key.push_str(":");
+
+                    let mut r: Vec<Spans<'_>> = Vec::new();
+                    r.push(Spans::from(Span::styled(key,style)));
+                    value
+                        .split("\n")
+                        .for_each(|e| {
+                            r.push(Spans::from(Span::raw(e.to_string())));
+                        });
+                    r.push(Spans::from(Span::raw("")));
+
+                    r
+                })
+                .flatten()
+                .collect();
+
+            content_spans
+        };
+    
+        let details_view = Paragraph::new(details_content)
+            .block(block.clone().title("Details"))
+            .style(*style)
+            .wrap(Wrap { trim: false });
+    
+        f.render_widget(details_view, main_view[2]);
+    }
+
+    /// Builds the bottom bar of the layout
+    fn build_bottom_bar<'a, B: tui::backend::Backend>(f: &mut Frame<B>, layout: Rect, state: &mut AppState, block: Block<'a>, style: &Style) {
+        let bottom_content: Spans<'_> = {
+            Spans::from(vec![
+                Span::styled(
+                    match state.focused_on {
+                        AppFocus::Elements => {
+                            "LST "
+                        },
+                        AppFocus::Attributes => {
+                            "ATR "
+                        },
+                        AppFocus::Edit => {
+                            "INS: "
+                        },
+                    },
+                    Style::default().add_modifier(Modifier::BOLD)
+                ),
+                Span::raw(state.get_edit().unwrap_or("".to_string())),
+                if state.is_editing() {
+                    Span::styled(
+                        "_",
+                        Style::default().add_modifier(Modifier::SLOW_BLINK)
+                    )
+                } else {
+                    Span::raw("")
+                }
+            ])    
+        };
+
+        let bottom_editor: Paragraph<'_> = Paragraph::new(bottom_content)
+            .block(block)
+            .style(*style)
+            .wrap(Wrap { trim: true });
+
+        f.render_widget(bottom_editor, layout);
+    }
+
+    /// Builds the footer of the layout
+    fn build_footer<'a, B: tui::backend::Backend>(f: &mut Frame<B>, layout: Rect, state: &mut AppState, block: Block<'a>, style: &Style) {
+        let actions_text: String = AppCommand::get_command_list_string().join(" | ");
+        let actions: Paragraph<'_> = Paragraph::new(actions_text)
+            .block(block)
+            .style(*style)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+        f.render_widget(actions, layout);
+    }
+
+    /// Builds the main UI
     pub fn ui<B: Backend>(f: &mut Frame<B>, state: &mut AppState) {
+        // Define standard block and style properties
         let standard_block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Rgb(0x05, 0xD9, 0xE8)))
@@ -222,160 +441,15 @@ pub(crate) mod ui {
             .split(f.size());
     
         // Top Bar
-        {
-            let top_bar = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints(
-                    [
-                        Constraint::Percentage(50),
-                        Constraint::Percentage(50),
-                    ]
-                    .as_ref(),
-                )
-                .split(main_layout[0]);
-        
-            let top_left_text = format!(
-                ":// {} {} - {}",
-                crate_name!(),
-                crate_version!(),
-                state.modified_string()
-            );
-            let top_left = Paragraph::new(top_left_text)
-                .block(alt_block.clone())
-                .style(alt_style)
-                .alignment(Alignment::Left)
-                .wrap(Wrap { trim: true });
-            f.render_widget(top_left, top_bar[0]);
-        
-            let top_right_text = state
-                .message
-                .unwrap_or("");
-
-            let top_right = Paragraph::new(top_right_text)
-                .block(alt_block.clone())
-                .style(alt_style)
-                .alignment(Alignment::Right)
-                .wrap(Wrap { trim: true });
-            f.render_widget(top_right, top_bar[1]);
-        }
+        build_top_bar(f, main_layout[0], state, alt_block.clone(), &alt_style);
     
         // Main View
-        let main_view = Layout::default()
-            .direction(Direction::Horizontal)
-            .margin(0)
-            .constraints(
-                [
-                    Constraint::Percentage(15),
-                    Constraint::Percentage(55),
-                    Constraint::Percentage(30)
-                ]
-                .as_ref(),
-            )
-            .split(main_layout[1]);
-    
-        let elements: Vec<ListItem<'_>> = state
-            .get_elements()
-            .iter()
-            .map(|e| e.to_list_item())
-            .collect();
-
-        let elements_list = List::new(elements)
-            .block(standard_block.clone().title("Events"))
-            .style(standard_style)
-            .highlight_style(
-                Style::default()
-                .add_modifier(Modifier::REVERSED)
-            );
-        f.render_stateful_widget(
-            elements_list,
-            main_view[0],
-            &mut state.list_state
-        );
-        
-        let vec_details: Vec<Row> = if let Some(selected_element) = state.get_selected_element() {
-            selected_element
-                .get_vecs()
-                .iter()
-                .map(|(k, v)| {
-                    Row::new(
-                        vec![k.to_string(), v.to_string()]
-                    )
-                    .bottom_margin(1)
-                })
-                .collect::<Vec<Row>>()
-        } else {
-            Vec::new()
-        };
-    
-        let attributes_table = Table::new(vec_details)
-            .block(standard_block.clone().title("Attributes"))
-            .widths(&[Constraint::Percentage(30), Constraint::Percentage(70)])
-            .column_spacing(1)
-            .style(standard_style)
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        
-        f.render_stateful_widget(
-            attributes_table,
-            main_view[1],
-            &mut state.details_state
-        );
-    
-        let editing_content = {
-            let txt: String = get_selected_details(state).unwrap_or("".to_string());
-            Spans::from(vec![Span::raw(txt)])
-        };
-    
-        let editing_view = Paragraph::new(editing_content)
-            .block(standard_block.clone().title("Details"))
-            .style(standard_style)
-            .wrap(Wrap { trim: false });
-    
-        f.render_widget(editing_view, main_view[2]);
+        build_main_view(f, main_layout[1], state, standard_block, &standard_style);
     
         // Bottom Text Lane
-        //let editing_text = "";
-        let bottom_content = {
-            Spans::from(vec![
-                Span::styled(
-                    match state.focused_on {
-                        AppFocus::Elements => {
-                            "LST "
-                        },
-                        AppFocus::Attributes => {
-                            "ATR "
-                        },
-                        AppFocus::Edit => {
-                            "INS: "
-                        },
-                    },
-                    Style::default().add_modifier(Modifier::BOLD)
-                ),
-                Span::raw(state.get_edit().unwrap_or("".to_string())),
-                if state.is_editing() {
-                    Span::styled(
-                        "_",
-                        Style::default().add_modifier(Modifier::SLOW_BLINK)
-                    )
-                } else {
-                    Span::raw("")
-                }
-            ])    
-        };
-
-        let bottom_editor = Paragraph::new(bottom_content)
-            .block(alt_block.clone())
-            .style(standard_style)
-            .wrap(Wrap { trim: true });
-
-        f.render_widget(bottom_editor, main_layout[2]);
+        build_bottom_bar(f, main_layout[2], state, alt_block.clone(), &standard_style);
 
         // Footer
-        let actions_text = AppCommand::get_command_list_string().join(" | ");
-        let actions = Paragraph::new(actions_text)
-            .block(alt_block)
-            .style(alt_style)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true });
-        f.render_widget(actions, main_layout[3]);
+        build_footer(f, main_layout[3], state, alt_block, &alt_style);
     }
 }

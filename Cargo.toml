@@ -9,6 +9,7 @@ edition = "2021"
 
 [dependencies]
 chrono = { version = "0.4", features = ["std"] }
+cron = { version = "0.12" }
 clap = { version = "4", features = ["cargo"] }
 confy = "0.5"
 crossterm = "0.27"

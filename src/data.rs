@@ -563,6 +563,7 @@ pub(crate) mod data_types {
                             NodeName::from_str(&new_name),
                             "".to_string()
                         );
+                    self.unsynced();
                 }
             }
             self.modification_buffer = None;
