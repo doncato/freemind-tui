@@ -440,7 +440,7 @@ pub(crate) mod data_types {
         pub list_state: ListState,
         pub details_state: TableState,
         pub prompt: Option<String>,
-        pub message: Option<String>,
+        pub message: Option<&'static str>,
         modification_buffer: Option<String>,
     }
 
@@ -515,8 +515,7 @@ pub(crate) mod data_types {
                 HashMap::new(),
             );
             self.push(Some(new_element));
-            let indx = len-1;
-            self.list_state.select(Some(indx));
+            self.list_state.select(Some(len));
             return self.get_selected_element_mut().expect("FATAL Newly created element not found");
         }
 
@@ -526,8 +525,10 @@ pub(crate) mod data_types {
         }
 
         /// Sets the current Modification Buffer to the specified value
-        pub fn set_edit(&mut self, value: Option<String>) {
+        /// returns whether the modification buffer is now Some or None
+        pub fn set_edit(&mut self, value: Option<String>) -> bool {
             self.modification_buffer = value;
+            self.modification_buffer.is_some()
         }
 
         /// Push the char value into the modifications buffer to the end
@@ -549,6 +550,24 @@ pub(crate) mod data_types {
             self.modification_buffer = None;
         }
 
+        /// Creates a new attribute with empty value inside the currently selected
+        /// element. The name of the new attribute will be the content of the
+        /// current modification buffer. Skips if the buffer is None. Resets the
+        /// buffer to None afterwards
+        pub fn create_new_attribute_from_edit(self: &mut AppState) {
+            if let Some(new_name) = &self.modification_buffer.clone() {
+                if let Some(element) = self.get_selected_element_mut() {
+                    element
+                        .nodes()
+                        .insert(
+                            NodeName::from_str(&new_name),
+                            "".to_string()
+                        );
+                }
+            }
+            self.modification_buffer = None;
+        }
+
         /// Saves the current Modification Buffer to the currently selected node
         /// and exits the editing mode
         pub fn save_changes(self: &mut AppState) {
@@ -558,9 +577,10 @@ pub(crate) mod data_types {
                     Some(element) => element,
                     None => self.create_new_element(),
                 };
-                element.nodes().insert(node.0, new_txt);
-                element.modified();
-                self.unsynced();
+                if Some(new_txt.clone()) != element.nodes().insert(node.0, new_txt) {
+                    element.modified();
+                    self.unsynced();
+                };
                 self.modification_buffer = None;
             }
         }

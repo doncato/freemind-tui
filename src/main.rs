@@ -16,6 +16,7 @@ use tui::{
     Terminal, 
 };
 
+const INFO_MSG_EDIT_EMPTY: &str = "Cannot edit empty set!";
 
 /*
 fn set_up_ui<B: Backend>(f: &mut Frame<B>) {
@@ -122,15 +123,21 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                     }
                     _ => (),
                 }
-            } else if state.focused_on == AppFocus::Edit { // If we currently edit something we need to pass the chars:
+            } else if state.is_editing() { // If we currently edit something we need to pass the chars:
                 match key.code {
                     KeyCode::Esc | KeyCode::Left => {
                         state.focused_on = AppFocus::Attributes;
                         state.abort_editing();
                     },
                     KeyCode::Enter => {
-                        state.focused_on = AppFocus::Attributes;
-                        state.save_changes();
+                        if state.focused_on == AppFocus::Edit {
+                            // If we currently edit the value
+                            state.focused_on = AppFocus::Attributes;
+                            state.save_changes();
+                        } else {
+                            // If we want to create a new attribute
+                            state.create_new_attribute_from_edit();
+                        }
                     },
                     KeyCode::Backspace => {
                         state.pop_edit();
@@ -169,8 +176,7 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                         match state.focused_on {
                             AppFocus::Elements => {
                                 state.create_new_element();
-                                state.focused_on = AppFocus::Edit;
-                                engine::edit_selected(&mut state);
+                                state.focused_on = AppFocus::Attributes;
                             },
                             AppFocus::Attributes => {
                                 engine::create_attribute(&mut state);
@@ -194,8 +200,11 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                         }
                     }
                     AppCommand::Edit => {
-                        state.focused_on = AppFocus::Edit;
-                        state.set_edit(ui::get_selected_details(&state));
+                        if state.set_edit(ui::get_selected_details(&state)) {
+                            state.focused_on = AppFocus::Edit;
+                        } else {
+                            state.message = Some(INFO_MSG_EDIT_EMPTY)
+                        }
                     }
                     AppCommand::Quit => {
                         if state.is_synced() || state.prompt.is_some() {
@@ -227,8 +236,11 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                                     state.focused_on = AppFocus::Attributes;
                                 },
                                 AppFocus::Attributes => {
-                                    state.focused_on = AppFocus::Edit;
-                                    engine::edit_selected(&mut state);
+                                    if state.set_edit(ui::get_selected_details(&state)) {
+                                        state.focused_on = AppFocus::Edit;
+                                    } else {
+                                        state.message = Some(INFO_MSG_EDIT_EMPTY)
+                                    }
                                 },
                                 _ => {}
                             }
@@ -265,8 +277,11 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                                 state.focused_on = AppFocus::Attributes;
                             },
                             AppFocus::Attributes => {
-                                state.focused_on = AppFocus::Edit;
-                                engine::edit_selected(&mut state);
+                                if state.set_edit(ui::get_selected_details(&state)) {
+                                    state.focused_on = AppFocus::Edit;
+                                } else {
+                                    state.message = Some(INFO_MSG_EDIT_EMPTY)
+                                }
                             },
                             _ => {}
                         }
@@ -290,7 +305,7 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
             },
             AppFocus::Edit => {
                 if state.get_edit().is_none() {
-                    state.set_edit(Some("".to_string()))
+                    state.set_edit(Some("".to_string()));
                 }
             },
         }

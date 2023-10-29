@@ -1,6 +1,5 @@
 pub(crate) mod engine {
-    use crate::ui;
-    use crate::data::data_types::{AppState, AppConfig, AppElement, AppFocus};
+    use crate::data::data_types::{AppState, AppConfig, AppElement};
     use clap::{Arg, Command, ArgMatches, crate_authors, crate_description, crate_version, ArgAction};
     use std::{fs, path::PathBuf};
 
@@ -31,24 +30,16 @@ pub(crate) mod engine {
         state.sync().await.is_err()
     }
 
-    pub fn enable_editing(state: &mut AppState) {
-        if state.details_state.selected().is_none() {
-            state.focused_on = AppFocus::Attributes;
-            state.details_state.select(Some(0));
-        }
-    }
-
     pub fn create_attribute(state: &mut AppState) -> () {
+        state.set_edit(Some("".to_string()));
+        /*
         let element: &AppElement = match state.get_selected_element() {
             Some(element) => element,
             None => return (),
         };
+        */
         //element.attributes.push(String::new(), String::new());
 
-    }
-    
-    pub fn edit_selected(state: &mut AppState) {
-        state.set_edit(ui::get_selected_details(state));
     }
 
     pub fn switch_up(state: &mut AppState) {
@@ -258,9 +249,7 @@ pub(crate) mod ui {
         
             let top_right_text = state
                 .message
-                .clone()
-                .unwrap_or(""
-                .to_string());
+                .unwrap_or("");
 
             let top_right = Paragraph::new(top_right_text)
                 .block(alt_block.clone())
