@@ -27,8 +27,8 @@ pub(crate) mod data_types {
     }
 
     #[derive(Debug, Clone)]
-    enum Node {
-        Element(AppElement),
+    enum RegistryNode {
+        Element(EntryNode),
         Directory(AppDirectory),
     }
 
@@ -40,7 +40,15 @@ pub(crate) mod data_types {
     }
     */
 
-    impl Node {
+    impl RegistryNode {
+        /// Returns the Name of the node if available
+        fn name(&self) -> Option<String> {
+            match self {
+                Self::Element(e) => Some(e.to_string()),
+                Self::Directory(d) => None
+            }
+        }
+
         /// Returns the ID of the node
         fn id(&self) -> Option<u16> {
             match self {
@@ -58,7 +66,7 @@ pub(crate) mod data_types {
         }
 
         /// Returns the AppElement if it is an Element or None
-        fn element(&self) -> Option<&AppElement> {
+        fn element(&self) -> Option<&EntryNode> {
             match self {
                 Self::Element(e) => Some(e),
                 _ => None,
@@ -68,7 +76,7 @@ pub(crate) mod data_types {
 
     #[derive(Debug, Clone)]
     struct Registry {
-        nodes: Vec<Node>,
+        nodes: Vec<RegistryNode>,
     }
 
     impl Registry {
@@ -84,7 +92,7 @@ pub(crate) mod data_types {
             //let mut obj_count: u16 = 0;
             let mut in_element: Option<u16> = None;
             let mut inside: String = "".to_string();
-            let mut next_map: HashMap<NodeName, String> = HashMap::new();
+            let mut next_map: HashMap<NodeName, NodeValue> = HashMap::new();
             let mut buf = Vec::new();
 
             loop {
@@ -94,7 +102,7 @@ pub(crate) mod data_types {
                     }
                     Event::End(e) if e.name().as_ref() == b"entry" => {
                         if in_element.is_some() {
-                            self.nodes.push(Node::Element(AppElement::new(in_element, next_map.clone())));
+                            self.nodes.push(RegistryNode::Element(EntryNode::new(in_element, next_map.clone())));
                             next_map.clear();
                             //obj_count += 1;
                             in_element = None;
@@ -115,7 +123,7 @@ pub(crate) mod data_types {
                         if in_element.is_some() {
                             next_map.insert(
                                 NodeName::from_str(inside.as_str()),
-                                str::from_utf8(e.into_inner().as_ref()).unwrap_or("").to_string()
+                                NodeValue::Text(str::from_utf8(e.into_inner().as_ref()).unwrap_or("").to_string())
                             );
                             inside = "".to_string();
                         }
@@ -124,7 +132,7 @@ pub(crate) mod data_types {
                         if inside != "".to_string() {
                             next_map.insert(
                                 NodeName::from_str(inside.as_str()),
-                                "".to_string()
+                                NodeValue::Text("".to_string())
                             );
                         }
                         inside = "".to_string();
@@ -138,7 +146,7 @@ pub(crate) mod data_types {
             Ok(self)
         }
 
-        fn entries(&self) -> Vec<&AppElement> {
+        fn entries(&self) -> Vec<&EntryNode> {
             self.nodes
                 .iter()
                 .map(|e| e.element())
@@ -228,16 +236,88 @@ pub(crate) mod data_types {
         }
     }
 
+    trait Node {
+        // Writes the element using the given quick xml writer
+        /// skips silently if the element does not have an ID
+        /// Skips the outer 'entry' tags if 'with_head' is false
+        fn write<W: std::io::Write>(&self, writer: &mut Writer<W>, with_head: bool) -> Result<(), quick_xml::Error>;
+    }
+
+    /// The Value of a subnode inside an entry node
+    /// aka. the text in between a subnode of an entry node
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum NodeValue {
+        Text(String),
+        NestedNode(HashMap<NodeName, NodeValue>),
+    }
+
+    /*
+    impl ToString for NodeValue {
+        fn to_string(&self) -> String {
+            match self {
+                Self::Text(t) => {
+                    t.to_string()
+                },
+                Self::NestedNode(n) => {
+                    n.iter()
+                        .map(|e| e.name().to_string())
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                }
+            }
+        }
+    }
+    */
+
+    impl fmt::Display for NodeValue {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            match self {
+                NodeValue::Text(t) => {
+                    write!(f, "{}", t)
+                },
+                NodeValue::NestedNode(n) => {
+                    n
+                        .iter()
+                        .for_each(|(k, v)| {
+                            write!(f, "{} - {}\n", k, v).unwrap(); // FIXME CHANGEME RETARD
+                        });
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    impl NodeValue {
+        /// Gets the contained text or composes the full XML text if other
+        /// nodes are contained
+        fn text_raw(&self) -> String {
+            match self {
+                Self::Text(t) => {
+                    t.to_string()
+                },
+                Self::NestedNode(n) => {
+                    n
+                        .iter()
+                        .map(|(n, v)| {
+                            format!("<{}>{}</{}>", n, v.text_raw(), n)
+                        })
+                        .collect::<Vec<String>>()
+                        .join("")
+                }
+            }
+        }
+    }
+
     #[derive(Debug, Clone)]
-    pub struct AppElement {
+    pub struct EntryNode {
         id: Option<u16>,
-        nodes: HashMap<NodeName, String>,
+        nodes: HashMap<NodeName, NodeValue>,
         removed: bool,
         modified: bool,
     }
 
-    impl PartialEq for AppElement {
-        fn eq(&self, other: &AppElement) -> bool {
+    impl PartialEq for EntryNode {
+        fn eq(&self, other: &Self) -> bool {
             match self.id {
                 Some(id) => Some(id) == other.id,
                 None => self == other, // Isn't this recursive???
@@ -245,13 +325,13 @@ pub(crate) mod data_types {
         }
     }
 
-    impl AsRef<Self> for AppElement {
+    impl AsRef<Self> for EntryNode {
         fn as_ref(&self) -> &Self {
             return &self;
         }
     }
 
-    impl fmt::Display for AppElement {
+    impl fmt::Display for EntryNode {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             /*
             let disp_due: String = match self.nodes.get("due") {
@@ -280,8 +360,38 @@ pub(crate) mod data_types {
         }
     }
 
-    impl AppElement {
-        pub fn new(id: Option<u16>, nodes: HashMap<NodeName, String>) -> Self {
+    impl Node for EntryNode {
+        /// Writes the element using the given quick xml writer
+        /// skips silently if the element does not have an ID
+        /// Skips the outer 'entry' tags if 'with_head' is false
+        fn write<W: std::io::Write>(&self, writer: &mut Writer<W>, with_head: bool) -> Result<(), quick_xml::Error> {
+            if self.id.is_none() {
+                return Ok(());
+            }
+            if with_head {
+                writer.write_event(Event::Start(
+                    BytesStart::new("entry")
+                        .with_attributes([Attribute::from(("id", self.id.unwrap().to_string().as_str()))])
+                    )
+                )?;
+            }
+
+            for (key, value) in self.nodes.iter() {
+                writer.write_event(Event::Start(BytesStart::new(key.to_string())))?;
+                writer.write_event(Event::Text(BytesText::new(&value.text_raw())))?;
+                writer.write_event(Event::End(BytesEnd::new(key.to_string())))?;
+            }
+
+            if with_head {
+                writer.write_event(Event::End(BytesEnd::new("entry")))?;
+            }
+
+            Ok(())
+        }
+    }
+
+    impl EntryNode {
+        pub fn new(id: Option<u16>, nodes: HashMap<NodeName, NodeValue>) -> Self {
             Self {
                 id,
                 nodes,
@@ -290,29 +400,28 @@ pub(crate) mod data_types {
             }
         }
 
-        pub fn title(&self) -> Option<&String> {
-            self.nodes.get(&NodeName::Title)
+        pub fn title(&self) -> Option<String> {
+            Some(self.nodes.get(&NodeName::Title)?.to_string())
         }
 
-        pub fn description(&self) -> Option<&String> {
-            self.nodes.get(&NodeName::Description)
+        pub fn description(&self) -> Option<String> {
+            Some(self.nodes.get(&NodeName::Description)?.to_string())
         }
 
         pub fn due(&self) -> Option<u32> {
-            if let Some(due) = self.nodes.get(&NodeName::Due) {
-                due.parse::<u32>().ok()
-            } else {
-                None
-            }
+            self.nodes.get(&NodeName::Due)?
+                .to_string()
+                .parse::<u32>()
+                .ok()
         }
         
         /// Returns all nodes of the element
-        pub fn nodes(&mut self) -> &mut HashMap<NodeName, String> {
+        pub fn nodes(&mut self) -> &mut HashMap<NodeName, NodeValue> {
             &mut self.nodes
         }
 
         /// Returns the nodes of the element as an Iter
-        pub fn get_nodes(&self) -> Iter<NodeName, String> {
+        pub fn get_nodes(&self) -> Iter<NodeName, NodeValue> {
             return self.nodes.iter()
         }
 
@@ -325,7 +434,7 @@ pub(crate) mod data_types {
         /// where each element is another vector consisting of the key
         /// and the value. Also sorts the elements
         pub fn get_vecs(&self) -> Vec<(String, String)> {
-            let mut result: Vec<(&NodeName, &String)> = self.nodes
+            let mut result: Vec<(&NodeName, &NodeValue)> = self.nodes
                 .iter()
                 .collect();
                 
@@ -342,7 +451,7 @@ pub(crate) mod data_types {
         /// for usage of searching and filtering
         pub fn get_text(&self) -> String {
             return String::new() 
-                + &self.nodes.clone().into_values().collect::<Vec<String>>().join(" ")
+                + &self.nodes.clone().into_values().map(|e| e.to_string()).collect::<Vec<String>>().join(" ")
                 .to_lowercase();
         }
 
@@ -360,40 +469,12 @@ pub(crate) mod data_types {
             new_id
         }
 
-        /// Writes the element using the given quick xml writer
-        /// skips silently if the element does not have an ID
-        /// Skips the outer 'entry' tags if 'with_head' is false
-        pub fn write<W: std::io::Write>(&self, writer: &mut Writer<W>, with_head: bool) -> Result<(), quick_xml::Error> {
-            if self.id.is_none() {
-                return Ok(());
-            }
-            if with_head {
-                writer.write_event(Event::Start(
-                    BytesStart::new("entry")
-                        .with_attributes([Attribute::from(("id", self.id.unwrap().to_string().as_str()))])
-                    )
-                )?;
-            }
-
-            for (key, value) in self.nodes.iter() {
-                writer.write_event(Event::Start(BytesStart::new(key.to_string())))?;
-                writer.write_event(Event::Text(BytesText::new(value)))?;
-                writer.write_event(Event::End(BytesEnd::new(key.to_string())))?;
-            }
-
-            if with_head {
-                writer.write_event(Event::End(BytesEnd::new("entry")))?;
-            }
-
-            Ok(())
-        }
-
         /// Returns the AppElement as an ListItem
         pub fn to_list_item<'a>(&self) -> ListItem<'a> {
             let mut item = ListItem::new(
                 self
                     .title()
-                    .unwrap_or(&"<no title>".to_string())
+                    .unwrap_or("<no title>".to_string())
                     .clone()
             );
             if self.removed {
@@ -434,7 +515,7 @@ pub(crate) mod data_types {
     pub struct AppState {
         config: AppConfig,
         client: Option<Client>,
-        elements: Vec<AppElement>,
+        elements: Vec<EntryNode>,
         synced: bool,
         pub focused_on: AppFocus,
         pub list_state: ListState,
@@ -467,17 +548,17 @@ pub(crate) mod data_types {
         }
 
         /// Returns All AppElements from the state as a Vec
-        pub fn get_elements(&self) -> Vec<AppElement> {
+        pub fn get_elements(&self) -> Vec<EntryNode> {
             self.elements.clone()
         }
 
         /// Returns All AppElements mutable from the state as a Vec
-        pub fn get_elements_mut(&mut self) -> &mut Vec<AppElement> {
+        pub fn get_elements_mut(&mut self) -> &mut Vec<EntryNode> {
             &mut self.elements
         }
 
         /// Returns the currently selected Element if available
-        pub fn get_selected_element(&self) -> Option<&AppElement> {
+        pub fn get_selected_element(&self) -> Option<&EntryNode> {
             if let Some(indx) = self.list_state.selected() {
                 self.elements.get(indx)
             } else {
@@ -486,7 +567,7 @@ pub(crate) mod data_types {
         }
 
         /// Returns the currently selected Element as mutable if available
-        pub fn get_selected_element_mut(&mut self) -> Option<&mut AppElement> {
+        pub fn get_selected_element_mut(&mut self) -> Option<&mut EntryNode> {
             if let Some(indx) = self.list_state.selected() {
                 self.elements.get_mut(indx)
             } else {
@@ -507,10 +588,10 @@ pub(crate) mod data_types {
             None
         }
 
-        /// Creates a new blank AppElement, adds it to the current state and returns it
-        pub fn create_new_element(self: &mut AppState) -> &mut AppElement {
+        /// Creates a new blank EntryNode, adds it to the current state and returns it
+        pub fn create_new_element(self: &mut AppState) -> &mut EntryNode {
             let len = self.get_elements().len();
-            let new_element: AppElement = AppElement::new(
+            let new_element: EntryNode = EntryNode::new(
                 None,
                 HashMap::new(),
             );
@@ -561,7 +642,7 @@ pub(crate) mod data_types {
                         .nodes()
                         .insert(
                             NodeName::from_str(&new_name),
-                            "".to_string()
+                            NodeValue::Text("".to_string())
                         );
                     self.unsynced();
                 }
@@ -574,11 +655,11 @@ pub(crate) mod data_types {
         pub fn save_changes(self: &mut AppState) {
             let new_txt: String = self.get_edit().unwrap_or("".to_string());
             if let Some(node) = self.get_selected_attribute() {
-                let element: &mut AppElement = match self.get_selected_element_mut() {
+                let element: &mut EntryNode = match self.get_selected_element_mut() {
                     Some(element) => element,
                     None => self.create_new_element(),
                 };
-                if Some(new_txt.clone()) != element.nodes().insert(node.0, new_txt) {
+                if Some(NodeValue::Text(new_txt.clone())) != element.nodes().insert(node.0, NodeValue::Text(new_txt)) {
                     element.modified();
                     self.unsynced();
                 };
@@ -587,7 +668,7 @@ pub(crate) mod data_types {
         }
 
         /// Finds and Returns an element defined by it's id
-        pub fn get_element_by_id(&mut self, id: u16) -> Option<&mut AppElement> {
+        pub fn get_element_by_id(&mut self, id: u16) -> Option<&mut EntryNode> {
             self
                 .elements
                 .iter_mut()
@@ -605,7 +686,7 @@ pub(crate) mod data_types {
 
         }
 
-        pub fn push(&mut self, element: Option<AppElement>) {
+        pub fn push(&mut self, element: Option<EntryNode>) {
             if let Some(e) = element {
                 self.elements.push(e)
             }
@@ -659,7 +740,7 @@ pub(crate) mod data_types {
 
         /// Adds non existing elements to the State of elements, skips
         /// already existing elements and returns the result
-        fn add_new_elements(&mut self, new: Vec<&AppElement>) {
+        fn add_new_elements(&mut self, new: Vec<&EntryNode>) {
             new.into_iter().for_each(|e| {
                 if self.elements.iter().any(|i| e == i) {
 
