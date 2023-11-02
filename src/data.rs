@@ -84,16 +84,54 @@ pub(crate) mod data_types {
             Self { nodes: Vec::new() }
         }
 
+        /// Reads with the given xml reader the content into an NodeName and NodeValue
+        fn read_node<'t>(mut reader: Reader<&'t [u8]>, parent: &[u8]) -> Result<(Reader<&'t [u8]>, NodeValue), quick_xml::Error> {
+            let mut buf: Vec<u8> = Vec::new();
+
+            let mut result: NodeValue = NodeValue::Text("".to_string());
+
+            let mut read_values: HashMap<NodeName, NodeValue> = HashMap::new();
+
+            loop {
+                match reader.read_event_into(&mut buf)? {
+                    Event::Start(e) => {
+                        let found: NodeValue;
+                        (reader, found) = Self::read_node(reader, e.name().as_ref())?;
+                        read_values.insert(
+                            NodeName::from_str(str::from_utf8(e.name().as_ref()).unwrap_or("")),
+                            found
+                        );
+                    }
+                    Event::Text(e) => {
+                        result = NodeValue::Text(
+                            str::from_utf8(
+                                e.into_inner().as_ref()
+                            )
+                            .unwrap_or("")
+                            .to_string()
+                        )
+                    },
+                    Event::End(e) if e.name().as_ref() == parent => {
+                        break
+                    },
+                    Event::Eof => break,
+                    _ => ()
+
+                }
+            };
+            Ok((reader, result))
+        }
+
         /// Parses the xml document as a String into the Registry object
         fn from_string(mut self, xml: &String) -> Result<Self, quick_xml::Error> {
-            let mut reader = Reader::from_str(xml);
+            let mut reader: Reader<&[u8]> = Reader::from_str(xml);
             reader.trim_text(true);
 
             //let mut obj_count: u16 = 0;
             let mut in_element: Option<u16> = None;
-            let mut inside: String = "".to_string();
+            //let mut inside: String = "".to_string();
             let mut next_map: HashMap<NodeName, NodeValue> = HashMap::new();
-            let mut buf = Vec::new();
+            let mut buf: Vec<u8> = Vec::new();
 
             loop {
                 match reader.read_event_into(&mut buf)? {
@@ -115,28 +153,15 @@ pub(crate) mod data_types {
                     Event::End(e) if e.name().as_ref() == b"directory" => {
 
                     }
-                    Event::Start(e) => {
-                        inside = str::from_utf8(e.name().as_ref()).unwrap_or("").to_string();
+                    Event::Start(e) if in_element.is_some() => {
+                        let found: NodeValue;
+                        (reader, found) = Self::read_node(reader, e.name().as_ref())?;
+                        next_map.insert(
+                            NodeName::from_str(str::from_utf8(e.name().as_ref()).unwrap_or("")),
+                            found
+                        );
                     }
-                    Event::Text(e) => {
-                        //println!("{:?} {:?}", inside.as_str(), str::from_utf8(e.clone().into_inner().as_ref()));
-                        if in_element.is_some() {
-                            next_map.insert(
-                                NodeName::from_str(inside.as_str()),
-                                NodeValue::Text(str::from_utf8(e.into_inner().as_ref()).unwrap_or("").to_string())
-                            );
-                            inside = "".to_string();
-                        }
-                    },
-                    Event::End(e) if e.name().as_ref() == inside.as_bytes() => {
-                        if inside != "".to_string() {
-                            next_map.insert(
-                                NodeName::from_str(inside.as_str()),
-                                NodeValue::Text("".to_string())
-                            );
-                        }
-                        inside = "".to_string();
-                    }
+
                     Event::End(e) if e.name().as_ref() == b"registry" => break,
                     Event::Eof => break,
                     _ => (),
