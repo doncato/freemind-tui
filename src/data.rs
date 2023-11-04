@@ -119,7 +119,11 @@ pub(crate) mod data_types {
 
                 }
             };
-            Ok((reader, result))
+            if read_values.is_empty() {
+                Ok((reader, result))
+            } else {
+                Ok((reader, NodeValue::NestedNode(read_values)))
+            }
         }
 
         /// Parses the xml document as a String into the Registry object
