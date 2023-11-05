@@ -69,8 +69,11 @@ fn select_next_element(state: &mut AppState) {
 }
 
 fn select_prev_field(state: &mut AppState) {
-    let len = 5;
-    let max = len-1;
+    let len: usize = match state.get_selected_element() {
+        Some(e) => e.flattened_node_count(),
+        _ => 0
+    };
+    let max: usize = len-1;
     let mut a: usize = state.details_state.selected().unwrap_or(1);
     if a <= 0 {
         a = max
@@ -81,8 +84,11 @@ fn select_prev_field(state: &mut AppState) {
 }
 
 fn select_next_field(state: &mut AppState) {
-    let len = 5;
-    let max = len-1;
+    let len: usize = match state.get_selected_element() {
+        Some(e) => e.flattened_node_count(),
+        _ => 0
+    };
+    let max: usize = len-1;
     let mut a: usize = state.details_state.selected().unwrap_or(max);
     if a >= max {
         a = 0

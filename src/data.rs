@@ -29,7 +29,7 @@ pub(crate) mod data_types {
     #[derive(Debug, Clone)]
     enum RegistryNode {
         Element(EntryNode),
-        Directory(AppDirectory),
+        Directory(DirectoryNode),
     }
 
     /*
@@ -131,10 +131,11 @@ pub(crate) mod data_types {
             let mut reader: Reader<&[u8]> = Reader::from_str(xml);
             reader.trim_text(true);
 
-            //let mut obj_count: u16 = 0;
             let mut in_element: Option<u16> = None;
+            let mut in_directory: Option<u16> = None;
             //let mut inside: String = "".to_string();
             let mut next_map: HashMap<NodeName, NodeValue> = HashMap::new();
+            let mut next_nodes: Vec<RegistryNode> = Vec::new();
             let mut buf: Vec<u8> = Vec::new();
 
             loop {
@@ -143,19 +144,31 @@ pub(crate) mod data_types {
                         in_element = get_id_attribute(&reader, &e);
                     }
                     Event::End(e) if e.name().as_ref() == b"entry" => {
-                        if in_element.is_some() {
+                        if in_directory.is_some() {
+                            next_nodes.push(RegistryNode::Element(EntryNode::new(in_element, next_map.clone())));
+                            next_map.clear();
+                            in_element = None;
+                        } else if in_element.is_some() {
                             self.nodes.push(RegistryNode::Element(EntryNode::new(in_element, next_map.clone())));
                             next_map.clear();
-                            //obj_count += 1;
                             in_element = None;
                         }
 
                     }
                     Event::Start(e) if e.name().as_ref() == b"directory" => {
-
+                        in_directory = get_id_attribute(&reader, &e);
                     }
                     Event::End(e) if e.name().as_ref() == b"directory" => {
-
+                        if in_directory.is_some() {
+                            self.nodes.push(
+                                RegistryNode::Directory(
+                                    DirectoryNode::new(in_directory, next_map.clone(), next_nodes.clone())
+                                )
+                            );
+                            next_map.clear();
+                            next_nodes.clear();
+                            in_directory = None;
+                        }
                     }
                     Event::Start(e) if in_element.is_some() => {
                         let found: NodeValue;
@@ -187,14 +200,18 @@ pub(crate) mod data_types {
 
 
     #[derive(Debug, Clone)]
-    struct AppDirectory {
+    struct DirectoryNode {
         id: Option<u16>,
+        nodes: HashMap<NodeName, NodeValue>,
+        content: Vec<RegistryNode>,
     }
 
-    impl AppDirectory {
-        fn new(id: Option<u16>,) -> Self {
+    impl DirectoryNode {
+        fn new(id: Option<u16>, nodes: HashMap<NodeName, NodeValue>, content: Vec<RegistryNode>) -> Self {
             Self {
                 id,
+                nodes,
+                content,
             }
         }
     }
@@ -444,6 +461,19 @@ pub(crate) mod data_types {
                 .ok()
         }
         
+        /// Returns the number of nodes held by the EntryNode
+        pub fn node_count(&self) -> usize {
+            self.nodes.len()
+        }
+
+        /// Returns the number of nodes and subnodes held by the EntryNode
+        pub fn flattened_node_count(&self) -> usize {
+            let mut node_vec = self.nodes
+                .iter()
+                .collect();
+            return Self::flatten_tree(&mut Vec::new(), &node_vec).len();
+        }
+
         /// Returns all nodes of the element
         pub fn nodes(&mut self) -> &mut HashMap<NodeName, NodeValue> {
             &mut self.nodes
@@ -459,20 +489,47 @@ pub(crate) mod data_types {
             self.modified = true;
         }
 
+        /// Returns the nested tree as an Vec over each nested level
+        fn flatten_tree<'a>(name_stack: &mut Vec<&'a NodeName>, nodes: &Vec<(&'a NodeName, &'a NodeValue)>) -> Vec<(String, String)> {
+            let mut r: Vec<(String, String)> = Vec::new();
+            nodes
+                .iter()
+                .for_each(|(node_name, node_value)| {
+                    name_stack.push(node_name);
+                    match node_value {
+                        NodeValue::Text(t) => {
+                            r.push(
+                                (
+                                    name_stack
+                                        .iter()
+                                        .map(|e| e.to_string())
+                                        .collect::<Vec<String>>()
+                                        .join("→"),
+                                    t.to_string()
+                                )
+                            );
+                        },
+                        NodeValue::NestedNode(n) => {
+                            r.append(&mut Self::flatten_tree(name_stack, &n.iter().collect()))
+                        }
+                    }
+                    name_stack.pop();
+                });
+
+            r
+        }
+
         /// A function that returns the App Element in a Form of Vectors
         /// where each element is another vector consisting of the key
         /// and the value. Also sorts the elements
         pub fn get_vecs(&self) -> Vec<(String, String)> {
-            let mut result: Vec<(&NodeName, &NodeValue)> = self.nodes
+            let mut nodes_sorted: Vec<(&NodeName, &NodeValue)> = self.nodes
                 .iter()
                 .collect();
                 
-            result.sort_by(|a, b| a.0.order().cmp(&b.0.order()));
+            nodes_sorted.sort_by(|a, b| a.0.order().cmp(&b.0.order()));
 
-            return result
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
+            return Self::flatten_tree(&mut Vec::new(), &nodes_sorted);
         }
 
         /// A function that returns the title followed by the description
