@@ -334,23 +334,26 @@ pub(crate) mod data_types {
     }
 
     impl NodeValue {
-        /// Gets the contained text or composes the full XML text if other
-        /// nodes are contained
-        fn text_raw(&self) -> String {
+        /// Writes the Nodevalue into the provided xml writer
+        fn write_xml<W: std::io::Write>(&self, mut writer: &mut Writer<W>) -> Result<(), quick_xml::Error> {
             match self {
                 Self::Text(t) => {
-                    t.to_string()
+                    writer.write_event(Event::Text(BytesText::new(t)))?;
                 },
                 Self::NestedNode(n) => {
                     n
                         .iter()
-                        .map(|(n, v)| {
-                            format!("<{}>{}</{}>", n, v.text_raw(), n)
-                        })
-                        .collect::<Vec<String>>()
-                        .join("")
+                        .for_each(|(n, v)| {
+                            // Fix error handling here
+                            writer.write_event(Event::Start(BytesStart::new(n.to_string()))).unwrap_or(());
+                            v.write_xml(&mut writer).unwrap_or(());
+                            writer.write_event(Event::End(BytesEnd::new(n.to_string()))).unwrap_or(());
+                            
+                        });
                 }
-            }
+            };
+
+            Ok(())
         }
     }
 
@@ -410,7 +413,7 @@ pub(crate) mod data_types {
         /// Writes the element using the given quick xml writer
         /// skips silently if the element does not have an ID
         /// Skips the outer 'entry' tags if 'with_head' is false
-        fn write<W: std::io::Write>(&self, writer: &mut Writer<W>, with_head: bool) -> Result<(), quick_xml::Error> {
+        fn write<W: std::io::Write>(&self, mut writer: &mut Writer<W>, with_head: bool) -> Result<(), quick_xml::Error> {
             if self.id.is_none() {
                 return Ok(());
             }
@@ -424,7 +427,7 @@ pub(crate) mod data_types {
 
             for (key, value) in self.nodes.iter() {
                 writer.write_event(Event::Start(BytesStart::new(key.to_string())))?;
-                writer.write_event(Event::Text(BytesText::new(&value.text_raw())))?;
+                value.write_xml(&mut writer)?;
                 writer.write_event(Event::End(BytesEnd::new(key.to_string())))?;
             }
 
@@ -460,7 +463,7 @@ pub(crate) mod data_types {
                 .parse::<u32>()
                 .ok()
         }
-        
+
         /// Returns the number of nodes held by the EntryNode
         pub fn node_count(&self) -> usize {
             self.nodes.len()
@@ -468,7 +471,7 @@ pub(crate) mod data_types {
 
         /// Returns the number of nodes and subnodes held by the EntryNode
         pub fn flattened_node_count(&self) -> usize {
-            let mut node_vec = self.nodes
+            let node_vec = self.nodes
                 .iter()
                 .collect();
             return Self::flatten_tree(&mut Vec::new(), &node_vec).len();
@@ -504,7 +507,7 @@ pub(crate) mod data_types {
                                         .iter()
                                         .map(|e| e.to_string())
                                         .collect::<Vec<String>>()
-                                        .join("→"),
+                                        .join("->"),
                                     t.to_string()
                                 )
                             );
@@ -717,19 +720,52 @@ pub(crate) mod data_types {
             self.modification_buffer = None;
         }
 
+
+        fn insert_chain_to_map(map: &mut HashMap<NodeName, NodeValue>, mut name_chain: Vec<NodeName>, value: NodeValue) -> Option<NodeValue> {
+            let mut r = None;
+            // TODO: Use VecDeque instead here?
+            let next_name: NodeName = name_chain.remove(0);
+            if name_chain.len() == 0 {
+                r = map.insert(next_name, value);
+            } else {
+                match map.get(&next_name) {
+                    Some(NodeValue::NestedNode(_)) => {},
+                    _ => {
+                        let blank_map: HashMap<NodeName, NodeValue> = HashMap::new();
+                        map.insert(next_name.clone(), NodeValue::NestedNode(blank_map));
+                    }
+                }
+                match map.get_mut(&next_name) {
+                    Some(NodeValue::NestedNode(n)) => {
+                        r = Self::insert_chain_to_map(n, name_chain, value);
+                    },
+                    _ => {}
+                }
+            }
+
+            return r;
+        }
+
         /// Creates a new attribute with empty value inside the currently selected
         /// element. The name of the new attribute will be the content of the
         /// current modification buffer. Skips if the buffer is None. Resets the
         /// buffer to None afterwards
         pub fn create_new_attribute_from_edit(self: &mut AppState) {
             if let Some(new_name) = &self.modification_buffer.clone() {
+                let new_name_chain: Vec<NodeName> = new_name
+                    .split("->")
+                    .map(|e| {NodeName::from_str(e)})
+                    .collect();
                 if let Some(element) = self.get_selected_element_mut() {
+                    Self::insert_chain_to_map(element.nodes(), new_name_chain, NodeValue::Text("".to_string()));
+                    /*
                     element
                         .nodes()
                         .insert(
                             NodeName::from_str(&new_name),
                             NodeValue::Text("".to_string())
                         );
+                    */
                     self.unsynced();
                 }
             }
@@ -741,11 +777,17 @@ pub(crate) mod data_types {
         pub fn save_changes(self: &mut AppState) {
             let new_txt: String = self.get_edit().unwrap_or("".to_string());
             if let Some(node) = self.get_selected_attribute() {
+                let name_chain: Vec<NodeName> = node.0
+                    .to_string()
+                    .split("->")
+                    .map(|e| {NodeName::from_str(e)})
+                    .collect();
                 let element: &mut EntryNode = match self.get_selected_element_mut() {
                     Some(element) => element,
                     None => self.create_new_element(),
                 };
-                if Some(NodeValue::Text(new_txt.clone())) != element.nodes().insert(node.0, NodeValue::Text(new_txt)) {
+                //if Some(NodeValue::Text(new_txt.clone())) != element.nodes().insert(node.0, NodeValue::Text(new_txt)) {
+                if Some(NodeValue::Text(new_txt.clone())) != Self::insert_chain_to_map(element.nodes(), name_chain, NodeValue::Text(new_txt)) {
                     element.modified();
                     self.unsynced();
                 };

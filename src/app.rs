@@ -371,7 +371,7 @@ pub(crate) mod ui {
                             "ATR "
                         },
                         AppFocus::Edit => {
-                            "INS: "
+                            "INS "
                         },
                     },
                     Style::default().add_modifier(Modifier::BOLD)
