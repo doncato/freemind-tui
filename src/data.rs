@@ -507,7 +507,7 @@ pub(crate) mod data_types {
                                         .iter()
                                         .map(|e| e.to_string())
                                         .collect::<Vec<String>>()
-                                        .join("->"),
+                                        .join(crate::DISPLAY_NESTING_STRING),
                                     t.to_string()
                                 )
                             );
@@ -753,7 +753,7 @@ pub(crate) mod data_types {
         pub fn create_new_attribute_from_edit(self: &mut AppState) {
             if let Some(new_name) = &self.modification_buffer.clone() {
                 let new_name_chain: Vec<NodeName> = new_name
-                    .split("->")
+                    .split(crate::DISPLAY_NESTING_STRING)
                     .map(|e| {NodeName::from_str(e)})
                     .collect();
                 if let Some(element) = self.get_selected_element_mut() {
@@ -779,7 +779,7 @@ pub(crate) mod data_types {
             if let Some(node) = self.get_selected_attribute() {
                 let name_chain: Vec<NodeName> = node.0
                     .to_string()
-                    .split("->")
+                    .split(crate::DISPLAY_NESTING_STRING)
                     .map(|e| {NodeName::from_str(e)})
                     .collect();
                 let element: &mut EntryNode = match self.get_selected_element_mut() {

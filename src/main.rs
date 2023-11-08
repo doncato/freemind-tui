@@ -16,6 +16,8 @@ use tui::{
     Terminal, 
 };
 
+const DISPLAY_NESTING_STRING: &str = "/";
+
 const INFO_MSG_SYNC_FAIL: &str = "Catastrophic failure occured while syncing!";
 const INFO_MSG_EDIT_EMPTY: &str = "Cannot edit empty set!";
 
