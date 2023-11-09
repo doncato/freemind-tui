@@ -1,14 +1,12 @@
-pub(crate) mod data_types {
-    use std::{fmt, io::Cursor, str, collections::{HashMap, hash_map::Iter}};
-    use crossterm::event::KeyCode;
-    use serde::{Serialize, Deserialize};
-    use reqwest::{Client, Response, header::HeaderValue};
-    use quick_xml::{Reader, events::{attributes::Attribute, Event, BytesStart, BytesText, BytesEnd}, Writer};
-    use rand::Rng;
-    use tui::{widgets::{ListItem, ListState, TableState}, style::{Modifier, Style}};
+pub(crate) mod data_helpers {
+    use crate::data::data_types::{NodeValue, NodeName};
+    use chrono::{Duration, Local, Days, Months, DateTime};
+    use quick_xml::{Reader, events::{Event, BytesStart}};
+    use std::collections::HashMap;
+    use std::str;
 
     /// Gets the value of the id attribute of any node
-    fn get_id_attribute<'a>(reader: &Reader<&[u8]>, element: &BytesStart<'a>) -> Option<u16> {
+    pub fn get_id_attribute<'a>(reader: &Reader<&[u8]>, element: &BytesStart<'a>) -> Option<u16> {
         element
             .attributes()
             .into_iter()
@@ -25,6 +23,140 @@ pub(crate) mod data_types {
             .next()
             .flatten()
     }
+
+    /// Reads with the given xml reader the content into an NodeName and NodeValue
+    //pub fn read_node<'t>(mut reader: Reader<&'t [u8]>, parent: &[u8]) -> Result<(Reader<&'t [u8]>, NodeValue), quick_xml::Error> {
+    pub fn read_node<'t>(reader: &mut Reader<&'t [u8]>, parent: &[u8]) -> Result<NodeValue, quick_xml::Error> {
+        let mut buf: Vec<u8> = Vec::new();
+
+        let mut result: NodeValue = NodeValue::Text("".to_string());
+
+        let mut read_values: HashMap<NodeName, NodeValue> = HashMap::new();
+
+        loop {
+            match reader.read_event_into(&mut buf)? {
+                Event::Start(e) => {
+                    let found: NodeValue;
+                    found = read_node(reader, e.name().as_ref())?;
+                    read_values.insert(
+                        NodeName::from_str(str::from_utf8(e.name().as_ref()).unwrap_or("")),
+                        found
+                    );
+                }
+                Event::Text(e) => {
+                    result = NodeValue::Text(
+                        str::from_utf8(
+                            e.into_inner().as_ref()
+                        )
+                        .unwrap_or("")
+                        .to_string()
+                    )
+                },
+                Event::End(e) if e.name().as_ref() == parent => {
+                    break
+                },
+                Event::Eof => break,
+                _ => ()
+
+            }
+        };
+        if read_values.is_empty() {
+            Ok(result)
+        } else {
+            Ok(NodeValue::NestedNode(read_values))
+        }
+    }
+
+    /*
+    fn match_loose_time_at_to_time(input: &str) -> DateTime<Tz> {
+
+    }
+    */
+
+    fn match_speech_in_time_to_due<'a, I: Iterator<Item = &'a str>, T: chrono::TimeZone>(input: &mut I, date: DateTime<T>) -> Option<DateTime<T>> {
+        if let Ok(count) = input
+            .next()
+            .unwrap_or(" ")
+            .parse::<u32>() {
+                let due_date: Option<chrono::DateTime<T>> = match input.next().unwrap_or("").to_lowercase().as_str() {
+                    "minute" | "minutes" => Some(date + Duration::minutes(count as i64)),
+                    "hour" | "hours" => Some(date + Duration::hours(count as i64)),
+                    "day" | "days" => date.checked_add_days(Days::new(count as u64)),
+                    "week" | "weeks" => Some(date + Duration::weeks(count as i64)),
+                    "month" | "months" => date.checked_add_months(Months::new(count)),
+                    _ => None
+                };
+
+                return due_date;
+            } else {
+                return None;
+            }
+    }
+
+    fn match_loose_time_in_to_due(input: &str) -> Result<i64, ()> {
+        let mut inputs = input
+            .split(" ")
+            .filter(|e| e.is_empty())
+            .skip(1);
+
+        let mut due: chrono::DateTime<Local> = Local::now();
+
+        let mut last_input_bit: String;
+
+        loop {
+            if let Some(due_date) = match_speech_in_time_to_due(&mut inputs, due) {
+                due = due_date;
+            } else {
+                return Err(())
+            }
+
+            last_input_bit = inputs.next().unwrap_or(" ").to_lowercase();
+
+            if last_input_bit.as_str() != "and" {
+                break
+            }
+        }
+        
+
+
+        Err(())
+    }
+
+    fn match_loose_time_on_to_due(input: &str) -> Result<i64, ()> {
+        Err(())
+    }
+
+    /// Takes a String with a cmdlet and returns the machine parsable string representation
+    /// simply returns the input String if no cmdlet was used
+    /// Returns Result::Err if a cmdlet was used but parsing failed
+    pub fn parse_cmdlet(input: String) -> Result<String, ()> {
+        if input.starts_with(crate::INPUT_CMDLET_PREFIX) {
+            let inp: &str = &input[crate::INPUT_CMDLET_PREFIX.len()..];
+            // Match Times losely
+            let parsed: String = if inp.starts_with("in")  {
+                match_loose_time_in_to_due(inp)?.to_string()
+            } else if inp.starts_with("on") {
+                match_loose_time_on_to_due(inp)?.to_string()
+            } else {
+                return Err(());
+            };
+
+            return Ok(parsed);
+        } else {
+            return Ok(input);
+        }
+    }
+}
+
+pub(crate) mod data_types {
+    use crate::data::data_helpers;
+    use crossterm::event::KeyCode;
+    use quick_xml::{Reader, events::{attributes::Attribute, Event, BytesStart, BytesText, BytesEnd}, Writer};
+    use rand::Rng;
+    use reqwest::{Client, Response, header::HeaderValue};
+    use serde::{Serialize, Deserialize};
+    use std::{fmt, io::Cursor, str, collections::{HashMap, hash_map::Iter}};
+    use tui::{widgets::{ListItem, ListState, TableState}, style::{Modifier, Style}};
 
     #[derive(Debug, Clone)]
     enum RegistryNode {
@@ -84,48 +216,6 @@ pub(crate) mod data_types {
             Self { nodes: Vec::new() }
         }
 
-        /// Reads with the given xml reader the content into an NodeName and NodeValue
-        fn read_node<'t>(mut reader: Reader<&'t [u8]>, parent: &[u8]) -> Result<(Reader<&'t [u8]>, NodeValue), quick_xml::Error> {
-            let mut buf: Vec<u8> = Vec::new();
-
-            let mut result: NodeValue = NodeValue::Text("".to_string());
-
-            let mut read_values: HashMap<NodeName, NodeValue> = HashMap::new();
-
-            loop {
-                match reader.read_event_into(&mut buf)? {
-                    Event::Start(e) => {
-                        let found: NodeValue;
-                        (reader, found) = Self::read_node(reader, e.name().as_ref())?;
-                        read_values.insert(
-                            NodeName::from_str(str::from_utf8(e.name().as_ref()).unwrap_or("")),
-                            found
-                        );
-                    }
-                    Event::Text(e) => {
-                        result = NodeValue::Text(
-                            str::from_utf8(
-                                e.into_inner().as_ref()
-                            )
-                            .unwrap_or("")
-                            .to_string()
-                        )
-                    },
-                    Event::End(e) if e.name().as_ref() == parent => {
-                        break
-                    },
-                    Event::Eof => break,
-                    _ => ()
-
-                }
-            };
-            if read_values.is_empty() {
-                Ok((reader, result))
-            } else {
-                Ok((reader, NodeValue::NestedNode(read_values)))
-            }
-        }
-
         /// Parses the xml document as a String into the Registry object
         fn from_string(mut self, xml: &String) -> Result<Self, quick_xml::Error> {
             let mut reader: Reader<&[u8]> = Reader::from_str(xml);
@@ -141,7 +231,7 @@ pub(crate) mod data_types {
             loop {
                 match reader.read_event_into(&mut buf)? {
                     Event::Start(e) if e.name().as_ref() == b"entry" => {
-                        in_element = get_id_attribute(&reader, &e);
+                        in_element = data_helpers::get_id_attribute(&reader, &e);
                     }
                     Event::End(e) if e.name().as_ref() == b"entry" => {
                         if in_directory.is_some() {
@@ -156,7 +246,7 @@ pub(crate) mod data_types {
 
                     }
                     Event::Start(e) if e.name().as_ref() == b"directory" => {
-                        in_directory = get_id_attribute(&reader, &e);
+                        in_directory = data_helpers::get_id_attribute(&reader, &e);
                     }
                     Event::End(e) if e.name().as_ref() == b"directory" => {
                         if in_directory.is_some() {
@@ -172,7 +262,7 @@ pub(crate) mod data_types {
                     }
                     Event::Start(e) if in_element.is_some() => {
                         let found: NodeValue;
-                        (reader, found) = Self::read_node(reader, e.name().as_ref())?;
+                        found = data_helpers::read_node(&mut reader, e.name().as_ref())?;
                         next_map.insert(
                             NodeName::from_str(str::from_utf8(e.name().as_ref()).unwrap_or("")),
                             found
@@ -248,7 +338,6 @@ pub(crate) mod data_types {
                 Self::Duration => "duration",
                 Self::Alert => "alert",
                 Self::Other(val) => val,
-                _ => "",
             })
         }
     }
@@ -774,8 +863,8 @@ pub(crate) mod data_types {
 
         /// Saves the current Modification Buffer to the currently selected node
         /// and exits the editing mode
-        pub fn save_changes(self: &mut AppState) {
-            let new_txt: String = self.get_edit().unwrap_or("".to_string());
+        pub fn save_changes(self: &mut AppState) -> Result<(), ()> {
+            let mut new_txt: String = self.get_edit().unwrap_or("".to_string());
             if let Some(node) = self.get_selected_attribute() {
                 let name_chain: Vec<NodeName> = node.0
                     .to_string()
@@ -786,13 +875,16 @@ pub(crate) mod data_types {
                     Some(element) => element,
                     None => self.create_new_element(),
                 };
-                //if Some(NodeValue::Text(new_txt.clone())) != element.nodes().insert(node.0, NodeValue::Text(new_txt)) {
+                
+                new_txt = data_helpers::parse_cmdlet(new_txt)?;
+
                 if Some(NodeValue::Text(new_txt.clone())) != Self::insert_chain_to_map(element.nodes(), name_chain, NodeValue::Text(new_txt)) {
                     element.modified();
                     self.unsynced();
                 };
                 self.modification_buffer = None;
             }
+            Ok(())
         }
 
         /// Finds and Returns an element defined by it's id
@@ -957,8 +1049,8 @@ pub(crate) mod data_types {
                         continue
                     }
                     Ok(Event::Start(e)) if e.name().as_ref() == b"entry" => {
-                        let mut write = true;
-                        if let Some(v) = get_id_attribute(&reader, &e) {
+                        let mut write: bool = true;
+                        if let Some(v) = data_helpers::get_id_attribute(&reader, &e) {
                             if let Some(pos) = self.elements.iter().position(|e| e.id == Some(v)) {
                                 if self.elements[pos].removed {
                                     self.elements.remove(pos);
@@ -1073,7 +1165,7 @@ pub(crate) mod data_types {
                         } else if e.name().as_ref() == b"entry" {
                             writer.write_event(Event::Start(e.to_owned())).unwrap();
 
-                            if let Some(id) = get_id_attribute(&reader, &e) {
+                            if let Some(id) = data_helpers::get_id_attribute(&reader, &e) {
                                 if let Some(element) = self.get_element_by_id(id) {
                                     if element.modified {
                                         element.modified = false;
@@ -1124,7 +1216,7 @@ pub(crate) mod data_types {
         pub async fn sync(&mut self) -> Result<(), reqwest::Error> {
             let result = self.fetch().await?;
 
-            let (entries_deleted, mut answer) = self
+            let (entries_deleted, answer) = self
                 .delete_removed(result.to_string())
                 .unwrap_or((false, result));
 

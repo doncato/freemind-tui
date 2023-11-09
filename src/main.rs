@@ -16,10 +16,13 @@ use tui::{
     Terminal, 
 };
 
+const INPUT_CMDLET_PREFIX: &str = "@";
+
 const DISPLAY_NESTING_STRING: &str = "/";
 
 const INFO_MSG_SYNC_FAIL: &str = "Catastrophic failure occured while syncing!";
 const INFO_MSG_EDIT_EMPTY: &str = "Cannot edit empty set!";
+const INFO_MSG_INVALID_CMDLET: &str = "Cannot parse cmdlet!";
 
 /*
 fn set_up_ui<B: Backend>(f: &mut Frame<B>) {
@@ -142,7 +145,9 @@ async fn run_app<'t, B: Backend>(terminal: &'t mut Terminal<B>, cfg: AppConfig) 
                         if state.focused_on == AppFocus::Edit {
                             // If we currently edit the value
                             state.focused_on = AppFocus::Attributes;
-                            state.save_changes();
+                            if state.save_changes().is_err() {
+                                state.message = Some(INFO_MSG_INVALID_CMDLET);
+                            };
                         } else {
                             // If we want to create a new attribute
                             state.create_new_attribute_from_edit();
