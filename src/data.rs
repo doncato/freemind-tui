@@ -1,6 +1,6 @@
 pub(crate) mod data_helpers {
     use crate::data::data_types::{NodeValue, NodeName};
-    use chrono::{Duration, Local, Days, Months, DateTime};
+    use chrono::{Duration, Local, Days, Months, DateTime, NaiveDateTime, LocalResult};
     use quick_xml::{Reader, events::{Event, BytesStart}};
     use std::collections::HashMap;
     use std::str;
@@ -67,6 +67,10 @@ pub(crate) mod data_helpers {
         }
     }
 
+    fn local_time_into_timestamp<T: chrono::TimeZone>(time: chrono::DateTime<T>) -> Result<i64, ()> {
+        Ok(0)
+    }
+
     /*
     fn match_loose_time_at_to_time(input: &str) -> DateTime<Tz> {
 
@@ -94,9 +98,26 @@ pub(crate) mod data_helpers {
     }
 
     fn match_loose_time_in_to_due(input: &str) -> Result<i64, ()> {
+        let accepted_formats: [&str; 14] = [
+            "%H",
+            "%H:%M",
+            "%H.%M",
+            "%H %M",
+            "%H:%M:%S",
+            "%H.%M.%S",
+            "%H %M %S",
+            "%I %P",
+            "%I:%M %P",
+            "%I.%M %P",
+            "%I %M %P",
+            "%I:%M:%S %P",
+            "%I.%M.%S %P",
+            "%I %M %S %P",
+        ];
+
         let mut inputs = input
             .split(" ")
-            .filter(|e| e.is_empty())
+            .filter(|e| !e.is_empty())
             .skip(1);
 
         let mut due: chrono::DateTime<Local> = Local::now();
@@ -106,20 +127,40 @@ pub(crate) mod data_helpers {
         loop {
             if let Some(due_date) = match_speech_in_time_to_due(&mut inputs, due) {
                 due = due_date;
-            } else {
-                return Err(())
             }
 
             last_input_bit = inputs.next().unwrap_or(" ").to_lowercase();
 
             if last_input_bit.as_str() != "and" {
-                break
+                break;
             }
         }
         
+        let mut time: Option<chrono::NaiveTime> = None;
+        if last_input_bit.as_str() == "at" {
+            let rest: String = inputs
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase();
 
+            accepted_formats
+            .iter()
+            .for_each(|f| {
+                if let Ok(t) = chrono::NaiveTime::parse_from_str(&rest, f) {
+                    time = Some(t);
+                }
+            })
+        }
 
-        Err(())
+        if let Some(ti) = time {
+            due = match NaiveDateTime::new(due.date_naive(), ti).and_local_timezone(Local) {
+                LocalResult::Single(d) => d,
+                LocalResult::Ambiguous(d, _) => d,
+                LocalResult::None => due,
+            }
+        }
+
+        Ok(due.timestamp())
     }
 
     fn match_loose_time_on_to_due(input: &str) -> Result<i64, ()> {
