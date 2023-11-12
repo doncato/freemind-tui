@@ -1,6 +1,6 @@
 pub(crate) mod data_helpers {
     use crate::data::data_types::{NodeValue, NodeName};
-    use chrono::{Duration, Local, Days, Months, DateTime, NaiveDateTime, LocalResult};
+    use chrono::{Duration, Local, Days, Months, DateTime, NaiveDateTime, LocalResult, NaiveTime};
     use quick_xml::{Reader, events::{Event, BytesStart}};
     use std::collections::HashMap;
     use std::str;
@@ -67,11 +67,11 @@ pub(crate) mod data_helpers {
         }
     }
 
+    /*
     fn local_time_into_timestamp<T: chrono::TimeZone>(time: chrono::DateTime<T>) -> Result<i64, ()> {
         Ok(0)
     }
 
-    /*
     fn match_loose_time_at_to_time(input: &str) -> DateTime<Tz> {
 
     }
@@ -97,7 +97,7 @@ pub(crate) mod data_helpers {
             }
     }
 
-    fn match_loose_time_in_to_due(input: &str) -> Result<i64, ()> {
+    fn match_speech_at_time_to_due(input: String) -> Option<NaiveTime> {
         let accepted_formats: [&str; 14] = [
             "%H",
             "%H:%M",
@@ -115,6 +115,38 @@ pub(crate) mod data_helpers {
             "%I %M %S %P",
         ];
 
+        let mut time: Option<chrono::NaiveTime> = None;
+
+        accepted_formats
+            .iter()
+            .for_each(|f| {
+                if let Ok(t) = chrono::NaiveTime::parse_from_str(&input, f) {
+                    time = Some(t);
+                }
+            });
+        return time;
+    }
+
+    fn match_loose_time_at_to_due(mut input: &str) -> Result<i64, ()> {
+        if input.starts_with("at") {
+            input = input[2..].trim();
+        }
+
+        let due: chrono::DateTime<Local> = Local::now();
+
+        if let Some(time) = match_speech_at_time_to_due(input.to_string()) {
+            Ok(match NaiveDateTime::new(due.date_naive(), time).and_local_timezone(Local) {
+                LocalResult::Single(d) => d,
+                LocalResult::Ambiguous(d, _) => d,
+                LocalResult::None => due,
+            }.timestamp())
+        } else {
+            Err(())
+        }
+
+    }
+
+    fn match_loose_time_in_to_due(input: &str) -> Result<i64, ()> {
         let mut inputs = input
             .split(" ")
             .filter(|e| !e.is_empty())
@@ -122,34 +154,26 @@ pub(crate) mod data_helpers {
 
         let mut due: chrono::DateTime<Local> = Local::now();
 
-        let mut last_input_bit: String;
+        let mut last_input_bit: &str;
 
         loop {
             if let Some(due_date) = match_speech_in_time_to_due(&mut inputs, due) {
                 due = due_date;
             }
 
-            last_input_bit = inputs.next().unwrap_or(" ").to_lowercase();
+            last_input_bit = inputs.next().unwrap_or(" ");
 
-            if last_input_bit.as_str() != "and" {
+            if last_input_bit != "and" {
                 break;
             }
         }
         
         let mut time: Option<chrono::NaiveTime> = None;
-        if last_input_bit.as_str() == "at" {
+        if last_input_bit == "at" {
             let rest: String = inputs
                 .collect::<Vec<_>>()
-                .join(" ")
-                .to_lowercase();
-
-            accepted_formats
-            .iter()
-            .for_each(|f| {
-                if let Ok(t) = chrono::NaiveTime::parse_from_str(&rest, f) {
-                    time = Some(t);
-                }
-            })
+                .join(" ");
+            time = match_speech_at_time_to_due(rest);
         }
 
         if let Some(ti) = time {
@@ -164,7 +188,64 @@ pub(crate) mod data_helpers {
     }
 
     fn match_loose_time_on_to_due(input: &str) -> Result<i64, ()> {
-        Err(())
+        let mut inputs = input
+            .split(" ")
+            .filter(|e| !e.is_empty());
+
+        let mut due: chrono::DateTime<Local> = Local::now();
+      
+        match inputs.next() {
+            Some(inp) if inp == "tomorrow" => {
+                due = due.checked_add_days(Days::new(1)).unwrap_or(due);
+            }
+            Some(inp) if inp == "tomorrow" => {
+                due = due.checked_add_days(Days::new(1)).unwrap_or(due);
+            }
+            _ => {}
+        };
+    
+        let diff: i8 = 7
+        - due
+            .format("%u")
+            .to_string()
+            .parse::<i8>()
+            .unwrap_or(0)
+        - match inputs.next().unwrap_or("") {
+            "monday" => 1,
+            "tuesday" => 2,
+            "wednesday" => 3,
+            "thursday" => 4,
+            "friday" => 5,
+            "saturday" => 6,
+            "sunday" | "week" | "weekend" => 7,
+            _ => 0
+        };
+
+        due = due
+            .checked_add_days(
+                Days::new(
+                    diff.try_into().unwrap_or(0)
+                )
+            )
+            .unwrap_or(due);
+
+        let mut time: Option<chrono::NaiveTime> = None;
+        if inputs.next() == Some("at") {
+            let rest: String = inputs
+                .collect::<Vec<_>>()
+                .join(" ");
+            time = match_speech_at_time_to_due(rest);
+        }
+
+        if let Some(ti) = time {
+            due = match NaiveDateTime::new(due.date_naive(), ti).and_local_timezone(Local) {
+                LocalResult::Single(d) => d,
+                LocalResult::Ambiguous(d, _) => d,
+                LocalResult::None => due,
+            }
+        }
+
+        Ok(due.timestamp())
     }
 
     /// Takes a String with a cmdlet and returns the machine parsable string representation
@@ -172,14 +253,16 @@ pub(crate) mod data_helpers {
     /// Returns Result::Err if a cmdlet was used but parsing failed
     pub fn parse_cmdlet(input: String) -> Result<String, ()> {
         if input.starts_with(crate::INPUT_CMDLET_PREFIX) {
-            let inp: &str = &input[crate::INPUT_CMDLET_PREFIX.len()..];
+            let inp: &str = &input[crate::INPUT_CMDLET_PREFIX.len()..].to_lowercase();
             // Match Times losely
             let parsed: String = if inp.starts_with("in")  {
                 match_loose_time_in_to_due(inp)?.to_string()
-            } else if inp.starts_with("on") {
+            } else if inp.starts_with("at") {
+                match_loose_time_at_to_due(inp)?.to_string()
+            } else if inp.starts_with("to") || inp.starts_with("on") || inp.starts_with("this") || inp.starts_with("next") {
                 match_loose_time_on_to_due(inp)?.to_string()
             } else {
-                return Err(());
+                match_loose_time_at_to_due(inp)?.to_string()
             };
 
             return Ok(parsed);

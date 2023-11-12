@@ -1,6 +1,6 @@
 [package]
 name = "freemind-tui"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["doncato <doncato@notarobot.cyou>"]
 description = "TUI Application working as a client with the Freemind API Server"
 edition = "2021"
