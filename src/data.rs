@@ -193,44 +193,50 @@ pub(crate) mod data_helpers {
             .filter(|e| !e.is_empty());
 
         let mut due: chrono::DateTime<Local> = Local::now();
+        let mut and_time: bool = false;
       
         match inputs.next() {
             Some(inp) if inp == "tomorrow" => {
                 due = due.checked_add_days(Days::new(1)).unwrap_or(due);
-            }
-            Some(inp) if inp == "tomorrow" => {
-                due = due.checked_add_days(Days::new(1)).unwrap_or(due);
+            },
+            Some(inp) if inp == "at" => {
+                and_time = true;
+            },
+            Some(_) => {
+                let diff: i8 = 7
+                - (due
+                    .format("%u")
+                    .to_string()
+                    .parse::<i8>()
+                    .unwrap_or(0)
+                - match inputs.next().unwrap_or("") {
+                    "monday" => 1,
+                    "tuesday" => 2,
+                    "wednesday" => 3,
+                    "thursday" => 4,
+                    "friday" => 5,
+                    "saturday" => 6,
+                    "sunday" | "week" | "weekend" => 7,
+                    "at" => {
+                        and_time = true;
+                        0
+                    }
+                    _ => 0
+                });
+        
+                due = due
+                    .checked_add_days(
+                        Days::new(
+                            diff.try_into().unwrap_or(0)
+                        )
+                    )
+                    .unwrap_or(due);
             }
             _ => {}
         };
     
-        let diff: i8 = 7
-        - due
-            .format("%u")
-            .to_string()
-            .parse::<i8>()
-            .unwrap_or(0)
-        - match inputs.next().unwrap_or("") {
-            "monday" => 1,
-            "tuesday" => 2,
-            "wednesday" => 3,
-            "thursday" => 4,
-            "friday" => 5,
-            "saturday" => 6,
-            "sunday" | "week" | "weekend" => 7,
-            _ => 0
-        };
-
-        due = due
-            .checked_add_days(
-                Days::new(
-                    diff.try_into().unwrap_or(0)
-                )
-            )
-            .unwrap_or(due);
-
         let mut time: Option<chrono::NaiveTime> = None;
-        if inputs.next() == Some("at") {
+        if and_time || inputs.next() == Some("at") {
             let rest: String = inputs
                 .collect::<Vec<_>>()
                 .join(" ");
