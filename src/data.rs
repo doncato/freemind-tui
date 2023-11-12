@@ -496,7 +496,7 @@ pub(crate) mod data_types {
                 Self::Other(v) => 127 + (v.len() % 128).try_into().unwrap_or(0),
                 Self::Color => 254,
                 Self::Alert => 254,
-                _ => u8::MAX,
+                //_ => u8::MAX,
             }
         }
     }
@@ -515,24 +515,6 @@ pub(crate) mod data_types {
         Text(String),
         NestedNode(HashMap<NodeName, NodeValue>),
     }
-
-    /*
-    impl ToString for NodeValue {
-        fn to_string(&self) -> String {
-            match self {
-                Self::Text(t) => {
-                    t.to_string()
-                },
-                Self::NestedNode(n) => {
-                    n.iter()
-                        .map(|e| e.name().to_string())
-                        .collect::<Vec<String>>()
-                        .join(" ")
-                }
-            }
-        }
-    }
-    */
 
     impl fmt::Display for NodeValue {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -580,6 +562,7 @@ pub(crate) mod data_types {
     pub struct EntryNode {
         id: Option<u16>,
         nodes: HashMap<NodeName, NodeValue>,
+        removed_nodes: Vec<NodeName>,
         removed: bool,
         modified: bool,
     }
@@ -663,6 +646,7 @@ pub(crate) mod data_types {
             Self {
                 id,
                 nodes,
+                removed_nodes: Vec::new(),
                 removed: false,
                 modified: false,
             }
@@ -670,10 +654,6 @@ pub(crate) mod data_types {
 
         pub fn title(&self) -> Option<String> {
             Some(self.nodes.get(&NodeName::Title)?.to_string())
-        }
-
-        pub fn description(&self) -> Option<String> {
-            Some(self.nodes.get(&NodeName::Description)?.to_string())
         }
 
         pub fn due(&self) -> Option<u32> {
@@ -897,7 +877,7 @@ pub(crate) mod data_types {
         }
 
         /// Creates a new blank EntryNode, adds it to the current state and returns it
-        pub fn create_new_element(self: &mut AppState) -> &mut EntryNode {
+        pub fn create_new_element(&mut self) -> &mut EntryNode {
             let len = self.get_elements().len();
             let new_element: EntryNode = EntryNode::new(
                 None,
@@ -969,7 +949,7 @@ pub(crate) mod data_types {
         /// element. The name of the new attribute will be the content of the
         /// current modification buffer. Skips if the buffer is None. Resets the
         /// buffer to None afterwards
-        pub fn create_new_attribute_from_edit(self: &mut AppState) {
+        pub fn create_new_attribute_from_edit(&mut self) {
             if let Some(new_name) = &self.modification_buffer.clone() {
                 let new_name_chain: Vec<NodeName> = new_name
                     .split(crate::DISPLAY_NESTING_STRING)
@@ -993,7 +973,7 @@ pub(crate) mod data_types {
 
         /// Saves the current Modification Buffer to the currently selected node
         /// and exits the editing mode
-        pub fn save_changes(self: &mut AppState) -> Result<(), ()> {
+        pub fn save_changes(&mut self) -> Result<(), ()> {
             let mut new_txt: String = self.get_edit().unwrap_or("".to_string());
             if let Some(node) = self.get_selected_attribute() {
                 let name_chain: Vec<NodeName> = node.0
@@ -1023,17 +1003,6 @@ pub(crate) mod data_types {
                 .elements
                 .iter_mut()
                 .find(|e| e.id == Some(id))
-        }
-
-        /// Returns all IDs present in the current appstate
-        pub fn get_ids(&self, ignore_removed: bool) -> Vec<u16> {
-            return self.elements
-                .clone()
-                .into_iter()
-                .filter(|e| !e.removed && ignore_removed)
-                .filter_map(|e| e.id)
-                .collect();
-
         }
 
         pub fn push(&mut self, element: Option<EntryNode>) {
@@ -1383,12 +1352,6 @@ pub(crate) mod data_types {
             Ok(())
         }
 
-        pub fn remove(&mut self, id: u16) -> bool {
-            let Some(posi) = self.elements.iter().position(|e| e.id == Some(id)) else {return false};
-            self.elements[posi].removed = true;
-            true
-        }
-
         /// Removes the currently selected element, returns true on successful removal
         pub fn remove_element(&mut self) -> bool {
             if let Some(index) = self.list_state.selected() {
@@ -1571,15 +1534,6 @@ pub(crate) mod data_types {
                 username: "".to_string(),
                 secret: "".to_string(),
                 auth_method: AuthMethod::Token,
-            }
-        }
-
-        pub(crate) fn new(server_address: String, username: String, secret: String, auth_method: AuthMethod) -> Self {
-            Self {
-                server_address,
-                username,
-                secret,
-                auth_method,
             }
         }
     }
