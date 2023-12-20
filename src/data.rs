@@ -1,6 +1,6 @@
 pub(crate) mod data_helpers {
     use crate::data::data_types::{NodeValue, NodeName};
-    use chrono::{Duration, Local, Days, Months, DateTime, NaiveDateTime, LocalResult, NaiveTime};
+    use chrono::{Duration, Local, Days, Months, DateTime, NaiveDateTime, LocalResult, NaiveTime, NaiveDate};
     use quick_xml::{Reader, events::{Event, BytesStart}};
     use std::collections::HashMap;
     use std::str;
@@ -125,6 +125,54 @@ pub(crate) mod data_helpers {
                 }
             });
         return time;
+    }
+
+    fn match_speech_date(input: String) -> Option<NaiveDate> {
+        let accepted_formats: [&str; 10] = [
+            "%m/%d/%Y",
+            "%m/%d/%y",
+            "%Y-%m-%d",
+            "%y-%m-%d",
+            "%d-%b-%Y",
+            "%d-%b-%y",
+            "%e-%b-%Y",
+            "%e-%b-%y",
+            "%d.%m.%Y",
+            "%d.%m.%y",
+        ];
+
+        let mut time: Option<chrono::NaiveDate> = None;
+
+        accepted_formats
+            .iter()
+            .for_each(|f| {
+                if let Ok(t) = chrono::NaiveDate::parse_from_str(&input, f) {
+                    time = Some(t);
+                }
+            });
+        return time;
+    }
+
+    fn match_loose_datetime_to_due(input: &str) -> Result<i64, ()> {
+        let inbits: Vec<&str> = input.split(' ').collect();
+        
+        let now: DateTime<Local> = Local::now();
+
+        let time: NaiveTime = match_speech_at_time_to_due(inbits[1..]
+            .join(" ")
+            .to_string())
+            .unwrap_or(now.time());
+        let date: NaiveDate = match_speech_date(inbits[0]
+            .to_string())
+            .unwrap_or(now.date_naive());
+
+        let then: DateTime<Local> = match NaiveDateTime::new(date, time).and_local_timezone(Local) {
+            LocalResult::Single(d) => d,
+            LocalResult::Ambiguous(d, _) => d,
+            LocalResult::None => now,
+        };
+
+        Ok(then.timestamp())
     }
 
     fn match_loose_time_at_to_due(mut input: &str) -> Result<i64, ()> {
@@ -268,7 +316,7 @@ pub(crate) mod data_helpers {
             } else if inp.starts_with("to") || inp.starts_with("on") || inp.starts_with("this") || inp.starts_with("next") {
                 match_loose_time_on_to_due(inp)?.to_string()
             } else {
-                match_loose_time_at_to_due(inp)?.to_string()
+                match_loose_datetime_to_due(inp)?.to_string()
             };
 
             return Ok(parsed);
